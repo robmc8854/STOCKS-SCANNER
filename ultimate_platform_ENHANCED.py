@@ -17,11 +17,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner_ultra import UltraScannerEngine
+from scanner_qullamaggie_enhanced_complete import scan_for_breakouts
 from config import config
-from complete_tickers import COMPLETE_TICKERS
+from complete_tickers import get_all_tickers
 import requests
-from position_manager import QullamaggiePositionManager, format_position_alert, check_and_alert_positions
+# from position_manager import QullamaggiePositionManager, format_position_alert, check_and_alert_positions
 
 # Telegram notification function
 def send_telegram_alert(message, photo_url=None):
@@ -678,8 +678,8 @@ def calculate_performance_metrics(trades):
 # Initialize
 if 'account' not in st.session_state:
     st.session_state.account = TradingAccount(config.ACCOUNT_SIZE)
-    st.session_state.scanner = UltraScannerEngine(COMPLETE_TICKERS)
-    st.session_state.position_manager = QullamaggiePositionManager(telegram_sender=send_telegram_alert)
+    # Scanner initialized via direct function calls
+    st.session_state.position_manager = None  # QullamaggiePositionManager disabled
     st.session_state.last_position_check = None
     st.session_state.last_morning_report_date = None
 
@@ -760,7 +760,7 @@ if st.session_state.auto_scan_enabled:
     
     if should_scan:
         # Run scan automatically
-        results = st.session_state.scanner.run_full_scan()
+        results = scan_for_breakouts(get_all_tickers())
         st.session_state.scan_results = results
         st.session_state.last_scan_time = datetime.now()
         
@@ -935,7 +935,7 @@ if page == "🔍 Scanner":
     with col1:
         if st.button("🚀 FULL SCAN", use_container_width=True, type="primary"):
             with st.spinner("🔍 Scanning 386 stocks... 2-3 minutes"):
-                results = st.session_state.scanner.run_full_scan()
+                results = scan_for_breakouts(get_all_tickers())
                 st.session_state.scan_results = results
                 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1056,7 +1056,7 @@ if 9 <= current_time_check.hour < 16:
     if st.session_state.last_position_check is None or \
        (datetime.now() - st.session_state.last_position_check).seconds > 3600:
         if len(account.positions) > 0:
-            alerts = check_and_alert_positions(
+            alerts = []  # check_and_alert_positions(
                 st.session_state.position_manager,
                 account.positions,
                 send_telegram_alert
@@ -1251,7 +1251,7 @@ elif page == "💼 Positions":
     with col_head2:
                 if st.button("🔍 Check All Positions", use_container_width=True):
         with st.spinner("Checking positions for alerts..."):
-            alerts = check_and_alert_positions(
+            alerts = []  # check_and_alert_positions(
             st.session_state.position_manager,
             account.positions,
             send_telegram_alert
