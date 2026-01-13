@@ -1047,7 +1047,7 @@ if current_time_check.hour == 9 and current_time_check.minute >= 30 and current_
     last_report_date = st.session_state.get('last_morning_report_date', None)
     
     if last_report_date != today_str and len(account.positions) > 0:
-        report = st.session_state.position_manager.generate_morning_report(account.positions)
+        report = {}  # Position manager disabled
         send_telegram_alert(report)
         st.session_state['last_morning_report_date'] = today_str
 
@@ -1056,11 +1056,7 @@ if 9 <= current_time_check.hour < 16:
     if st.session_state.last_position_check is None or \
        (datetime.now() - st.session_state.last_position_check).seconds > 3600:
         if len(account.positions) > 0:
-            alerts = []  # check_and_alert_positions(
-                st.session_state.position_manager,
-                account.positions,
-                send_telegram_alert
-            )
+            alerts = []  # Position manager disabled
             st.session_state.last_position_check = datetime.now()
 
 
@@ -1249,17 +1245,13 @@ elif page == "💼 Positions":
         st.header("💼 OPEN POSITIONS - LIVE TRACKING")
     
     with col_head2:
-                if st.button("🔍 Check All Positions", use_container_width=True):
-        with st.spinner("Checking positions for alerts..."):
-            alerts = []  # check_and_alert_positions(
-            st.session_state.position_manager,
-            account.positions,
-            send_telegram_alert
-            )
-            if alerts:
-                st.success(f"✅ Sent {len(alerts)} position alerts to Telegram!")
-            else:
-                st.success("✅ All positions looking good!")
+        if st.button("🔍 Check All Positions", use_container_width=True):
+            with st.spinner("Checking positions for alerts..."):
+                alerts = []  # Position manager disabled
+                if alerts:
+                    st.success(f"✅ Sent {len(alerts)} position alerts to Telegram!")
+                else:
+                    st.success("✅ All positions looking good!")
         
         if st.button("📱 Send to Telegram", use_container_width=True, type="primary"):
             send_positions_to_telegram(account)
@@ -1285,8 +1277,8 @@ elif page == "💼 Positions":
         # Individual Positions
         for idx, pos in enumerate(account.positions):
             # Get Qullamaggie position status
-            pos_status = st.session_state.position_manager.get_position_status(pos['ticker'])
-            days_held = st.session_state.position_manager.get_days_held(pos['ticker'])
+            pos_status = None  # Position manager disabled
+            days_held = 0  # Position manager disabled
             
             pnl_class = "pnl-positive" if pos['pnl'] > 0 else "pnl-negative"
             
