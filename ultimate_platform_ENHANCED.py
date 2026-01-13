@@ -17,9 +17,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner_qullamaggie_enhanced_complete import scan_for_breakouts
+from scanner_qullamaggie_enhanced_complete import UltraScannerEngine
 from config import config
-from complete_tickers import get_all_tickers
+from complete_tickers import SP500_TICKERS as COMPLETE_TICKERS
 import requests
 # from position_manager import QullamaggiePositionManager, format_position_alert, check_and_alert_positions
 
@@ -678,7 +678,7 @@ def calculate_performance_metrics(trades):
 # Initialize
 if 'account' not in st.session_state:
     st.session_state.account = TradingAccount(config.ACCOUNT_SIZE)
-    # Scanner initialized via direct function calls
+    st.session_state.scanner = UltraScannerEngine(COMPLETE_TICKERS)
     st.session_state.position_manager = None  # QullamaggiePositionManager disabled
     st.session_state.last_position_check = None
     st.session_state.last_morning_report_date = None
@@ -760,7 +760,7 @@ if st.session_state.auto_scan_enabled:
     
     if should_scan:
         # Run scan automatically
-        results = scan_for_breakouts(get_all_tickers())
+        results = st.session_state.scanner.run_full_scan()
         st.session_state.scan_results = results
         st.session_state.last_scan_time = datetime.now()
         
@@ -935,7 +935,7 @@ if page == "🔍 Scanner":
     with col1:
         if st.button("🚀 FULL SCAN", use_container_width=True, type="primary"):
             with st.spinner("🔍 Scanning 386 stocks... 2-3 minutes"):
-                results = scan_for_breakouts(get_all_tickers())
+                results = st.session_state.scanner.run_full_scan()
                 st.session_state.scan_results = results
                 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

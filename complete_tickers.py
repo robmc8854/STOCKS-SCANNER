@@ -2,7 +2,7 @@
 Complete list of S&P 500 tickers for scanning
 """
 
-SP500_TICKERS = [
+COMPLETE_TICKERS = [
     'A', 'AAL', 'AAPL', 'ABBV', 'ABNB', 'ABT', 'ACGL', 'ACN', 'ADBE', 'ADI',
     'ADM', 'ADP', 'ADSK', 'AEE', 'AEP', 'AES', 'AFL', 'AIG', 'AIZ', 'AJG',
     'AKAM', 'ALB', 'ALGN', 'ALL', 'ALLE', 'AMAT', 'AMCR', 'AMD', 'AME', 'AMGN',
@@ -55,6 +55,8 @@ SP500_TICKERS = [
     'WTW', 'WY', 'WYNN', 'XEL', 'XOM', 'XYL', 'YUM', 'ZBH', 'ZBRA', 'ZTS'
 ]
 
+SP500_TICKERS = COMPLETE_TICKERS  # Alias for compatibility
+
 def get_all_tickers():
     """Return the complete S&P 500 ticker list"""
-    return SP500_TICKERS
+    return COMPLETE_TICKERS
