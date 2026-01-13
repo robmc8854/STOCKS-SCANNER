@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from scanner_qullamaggie_enhanced_complete import UltraScannerEngine
 from config import config
-from complete_tickers import SP500_TICKERS as COMPLETE_TICKERS
+from complete_tickers import COMPLETE_TICKERS
 import requests
 # from position_manager import QullamaggiePositionManager, format_position_alert, check_and_alert_positions
 
@@ -679,7 +679,7 @@ def calculate_performance_metrics(trades):
 if 'account' not in st.session_state:
     st.session_state.account = TradingAccount(config.ACCOUNT_SIZE)
     st.session_state.scanner = UltraScannerEngine(COMPLETE_TICKERS)
-    st.session_state.position_manager = None  # QullamaggiePositionManager disabled
+    # st.session_state.position_manager = None  # Disabled
     st.session_state.last_position_check = None
     st.session_state.last_morning_report_date = None
 
@@ -928,7 +928,15 @@ st.markdown("---")
 # ============================================================================
 if page == "🔍 Scanner":
     st.header("🔍 MARKET SCANNER - PROFESSIONAL ANALYSIS")
-    st.markdown("**Qullamaggie + Niv Methodologies** | 386 Stocks | 50+ Filters | 8 Patterns | Real-time Analysis")
+    st.markdown("**Qullamaggie + Niv Methodologies** | 500 Stocks | 50+ Filters | 8 Patterns | Real-time Analysis")
+    
+    # DEBUG: Show current state
+    if not st.session_state.scan_results.empty:
+        st.success(f"✅ {len(st.session_state.scan_results)} setups in memory")
+        if len(st.session_state.scan_results) > 0:
+            st.info(f"📊 Scores: {sorted(st.session_state.scan_results['score'].values, reverse=True)}")
+    else:
+        st.info("📭 No scan results yet - click 'FULL SCAN' to start")
     
     col1, col2, col3 = st.columns([2,2,6])
     
@@ -983,6 +991,11 @@ if page == "🔍 Scanner":
                                         max_shares, can_add, reasons
                                     )
                                     send_telegram_alert(alert_msg)
+                                    
+                                    # Send TradingView link for chart
+                                    tv_link = f"📊 Chart: https://www.tradingview.com/chart/?symbol={row['ticker']}"
+                                    send_telegram_alert(tv_link)
+                                    
                                     new_alerts += 1
                                     
                                     if can_add:
@@ -1047,7 +1060,7 @@ if current_time_check.hour == 9 and current_time_check.minute >= 30 and current_
     last_report_date = st.session_state.get('last_morning_report_date', None)
     
     if last_report_date != today_str and len(account.positions) > 0:
-        report = {}  # Position manager disabled
+        report = st.session_state.position_manager.generate_morning_report(account.positions)
         send_telegram_alert(report)
         st.session_state['last_morning_report_date'] = today_str
 
@@ -1081,9 +1094,10 @@ if 9 <= current_time_check.hour < 16:
             col_d.metric("💫 Good", quality_counts['Good (70-79)'])
     
     # Display Results
+    st.markdown("---")
+    
+    # ALWAYS show results section
     if not st.session_state.scan_results.empty:
-        st.markdown("---")
-        
         filtered = st.session_state.scan_results[st.session_state.scan_results['score'] >= min_score]
         
         if len(filtered) > 0:
@@ -1277,8 +1291,8 @@ elif page == "💼 Positions":
         # Individual Positions
         for idx, pos in enumerate(account.positions):
             # Get Qullamaggie position status
-            pos_status = None  # Position manager disabled
-            days_held = 0  # Position manager disabled
+            pos_status = st.session_state.position_manager.get_position_status(pos['ticker'])
+            days_held = st.session_state.position_manager.get_days_held(pos['ticker'])
             
             pnl_class = "pnl-positive" if pos['pnl'] > 0 else "pnl-negative"
             

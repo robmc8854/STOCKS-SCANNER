@@ -821,6 +821,10 @@ class UltraScannerEngine:
         return pd.DataFrame(results)
 
 
+    def pre_filter_stocks(self):
+        """Compatibility wrapper for test scripts"""
+        return self.run_full_scan()
+
 if __name__ == "__main__":
     # Test scan
     from complete_tickers import COMPLETE_TICKERS
@@ -841,3 +845,8 @@ if __name__ == "__main__":
             print(f"  RSI: {row['rsi']:.1f}")
             print(f"  Volume: {row['volume_ratio']:.1f}x")
             print(f"  RS: {row['relative_strength']:.2f}x")
+
+# Compatibility alias
+
+# Compatibility alias
+QullamaggieEnhancedScanner = UltraScannerEngine
