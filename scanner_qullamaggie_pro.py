@@ -360,6 +360,12 @@ class QullamaggiePro:
                 setup['adr'] = adr
                 setup['current_price'] = current_price
                 
+                # Add fields for backward compatibility with existing dashboard
+                setup['rsi'] = tech['rsi']
+                setup['relative_strength'] = self._calculate_rs_ratio(hist)
+                setup['price_to_ma10'] = ((current_price - tech['ma_10']) / tech['ma_10'] * 100) if tech['ma_10'] > 0 else 0
+                setup['price_to_ma20'] = ((current_price - tech['ma_20']) / tech['ma_20'] * 100) if tech['ma_20'] > 0 else 0
+                
                 # Pro Dashboard Data
                 setup['dashboard'] = {
                     'prior_move_60d': rating_details.get('prior_move', 0),
@@ -372,6 +378,19 @@ class QullamaggiePro:
                     'volume': self._get_volume_status(rating_details.get('volume_pattern', 1)),
                     'range_10d': rating_details.get('range_10d', 0)
                 }
+                
+                # PRO FEATURES for Telegram alerts
+                setup['pro_features'] = []
+                if stars >= 4:
+                    setup['pro_features'].append(f"{'⭐' * stars} {stars}-STAR QUALITY SETUP")
+                if coiling:
+                    setup['pro_features'].append(f"🟡 COILING: {coiling['message']}")
+                if pocket_pivot:
+                    setup['pro_features'].append(f"🟣 POCKET PIVOT: {pocket_pivot['message']}")
+                if rs_status == "NEW HIGH":
+                    setup['pro_features'].append(f"💎 RS NEW HIGH - Market Leader!")
+                elif rs_status == "STRONG":
+                    setup['pro_features'].append(f"💪 STRONG RS vs {self.benchmark}")
                 
                 setups.append(setup)
         
@@ -426,6 +445,30 @@ class QullamaggiePro:
                 }
         
         return None
+    
+    def _calculate_rs_ratio(self, hist: pd.DataFrame) -> float:
+        """Calculate relative strength ratio vs SPY"""
+        if self.spy_data is None or len(hist) < 20:
+            return 1.0
+        
+        try:
+            # Calculate 20-day performance
+            stock_perf = (hist['Close'].iloc[-1] / hist['Close'].iloc[-20]) - 1
+            
+            # Align SPY data
+            common_dates = hist.index.intersection(self.spy_data.index)
+            if len(common_dates) < 20:
+                return 1.0
+            
+            spy_recent = self.spy_data.loc[common_dates].iloc[-20:]
+            spy_perf = (spy_recent['Close'].iloc[-1] / spy_recent['Close'].iloc[0]) - 1
+            
+            # Ratio > 1 means outperforming
+            if spy_perf != 0:
+                return (1 + stock_perf) / (1 + spy_perf)
+            return 1.0
+        except:
+            return 1.0
     
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
         """Calculate RSI"""

@@ -992,6 +992,11 @@ if page == "🔍 Scanner":
                                     )
                                     send_telegram_alert(alert_msg)
                                     
+                                    # Send PRO FEATURES if available
+                                    if 'pro_features' in row and row['pro_features']:
+                                        pro_msg = "\n🎯 PRO ANALYSIS:\n" + "\n".join([f"  {feat}" for feat in row['pro_features']])
+                                        send_telegram_alert(pro_msg)
+                                    
                                     # Send TradingView link for chart
                                     tv_link = f"📊 Chart: https://www.tradingview.com/chart/?symbol={row['ticker']}"
                                     send_telegram_alert(tv_link)
