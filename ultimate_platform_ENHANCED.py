@@ -17,7 +17,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner_qullamaggie_enhanced_complete import UltraScannerEngine, SetupTracker, SetupState
+from scanner_qullamaggie_enhanced_complete import UltraScannerEngine
 from config import config
 from complete_tickers import COMPLETE_TICKERS
 import requests
@@ -679,8 +679,6 @@ def calculate_performance_metrics(trades):
 if 'account' not in st.session_state:
     st.session_state.account = TradingAccount(config.ACCOUNT_SIZE)
     st.session_state.scanner = UltraScannerEngine(COMPLETE_TICKERS)
-    st.session_state.setup_tracker = SetupTracker()
-    st.session_state.state_events = []
     # st.session_state.position_manager = None  # Disabled
     st.session_state.last_position_check = None
     st.session_state.last_morning_report_date = None
@@ -764,8 +762,6 @@ if st.session_state.auto_scan_enabled:
         # Run scan automatically
         results = st.session_state.scanner.run_full_scan()
         st.session_state.scan_results = results
-        # Update monitoring/entry states (state machine)
-        st.session_state.state_events = st.session_state.setup_tracker.update_from_results(results)
         st.session_state.last_scan_time = datetime.now()
         
         # Auto-validate and send alerts (ONLY NEW ONES)
@@ -941,16 +937,6 @@ if page == "🔍 Scanner":
             st.info(f"📊 Scores: {sorted(st.session_state.scan_results['score'].values, reverse=True)}")
     else:
         st.info("📭 No scan results yet - click 'FULL SCAN' to start")
-    # --- Always-available raw results table (so you can SEE the scan output immediately) ---
-    if isinstance(st.session_state.scan_results, pd.DataFrame) and not st.session_state.scan_results.empty:
-        with st.expander('📊 View FULL scan results (raw table)', expanded=True):
-            df_show = st.session_state.scan_results.copy()
-            # Ensure TradingView column is clickable
-            if 'tradingview' in df_show.columns:
-                df_show['tradingview'] = df_show['tradingview'].apply(lambda u: f'[Chart]({u})')
-                st.dataframe(df_show, use_container_width=True, column_config={'tradingview': st.column_config.MarkdownColumn('TradingView')})
-            else:
-                st.dataframe(df_show, use_container_width=True)
     
     col1, col2, col3 = st.columns([2,2,6])
     
@@ -959,31 +945,12 @@ if page == "🔍 Scanner":
             with st.spinner("🔍 Scanning 386 stocks... 2-3 minutes"):
                 results = st.session_state.scanner.run_full_scan()
                 st.session_state.scan_results = results
-                # Update monitoring/entry states (state machine)
-                st.session_state.state_events = st.session_state.setup_tracker.update_from_results(results)
                 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 os.makedirs('data', exist_ok=True)
                 results.to_csv(f'data/scan_{timestamp}.csv', index=False)
                 
                 st.success(f"✅ Found {len(results)} setups!")
-                # ✅ ALWAYS show scan results immediately (so you can see output even before filtering)
-                if isinstance(results, pd.DataFrame) and not results.empty:
-                    with st.expander("📊 View FULL scan results (raw table)", expanded=False):
-                        df_view = results.copy()
-                        # Add TradingView link column
-                        if "ticker" in df_view.columns:
-                            df_view["TradingView"] = df_view["ticker"].apply(lambda t: f"[Chart](https://www.tradingview.com/chart/?symbol={t})")
-                            st.dataframe(
-                                df_view.sort_values("score", ascending=False) if "score" in df_view.columns else df_view,
-                                use_container_width=True,
-                                column_config={"TradingView": st.column_config.MarkdownColumn("TradingView")},
-                            )
-                        else:
-                            st.dataframe(df_view, use_container_width=True)
-                else:
-                    st.info("No setups returned from scan (results empty).")
-
                 
                 # AUTO-VALIDATE AND SEND TELEGRAM ALERTS (ONLY NEW ONES)
                 if len(results) > 0:
@@ -1860,46 +1827,6 @@ elif page == "⚙️ Settings":
                     mime="application/json"
                 )
 
-
-# =========================
-# SETUP MONITOR (STATE TRACKER)
-# =========================
-try:
-    if 'setup_tracker' in st.session_state:
-        st.markdown("---")
-        st.header("📡 Setup Monitor (Monitoring → Entry → Invalidate)")
-
-        tracker_df = st.session_state.setup_tracker.to_dataframe()
-        if tracker_df is None or len(tracker_df) == 0:
-            st.info("No monitored setups yet. Run a scan to populate monitoring states.")
-        else:
-            # Split by state
-            def show_state(state, emoji):
-                sdf = tracker_df[tracker_df['state'] == state]
-                st.subheader(f"{emoji} {state}")
-                if len(sdf) == 0:
-                    st.caption("None")
-                else:
-                    show_cols = [c for c in ['ticker','setup_type','score','current_price','entry','stop','notes','last_state_change','miss_count','invalid_reason'] if c in sdf.columns]
-                    st.dataframe(sdf[show_cols].sort_values(by=['score'], ascending=False), use_container_width=True)
-
-            colA, colB = st.columns(2)
-            with colA:
-                show_state('MONITORING', '🟡')
-            with colB:
-                show_state('ENTRY_TRIGGERED', '🟢')
-
-            show_state('INVALIDATED', '🔴')
-
-        # Show latest transition events
-        if 'state_events' in st.session_state and st.session_state.state_events:
-            with st.expander("Recent State Changes"):
-                evdf = pd.DataFrame(st.session_state.state_events)
-                st.dataframe(evdf, use_container_width=True)
-except Exception as _e:
-    st.warning(f"Setup Monitor error: {_e}")
-
-
 # Footer
 st.markdown("---")
 col1, col2, col3, col4 = st.columns(4)
@@ -1912,3 +1839,4 @@ col4.markdown(f"**Features:** ALL 234 ACTIVE")
 if len(account.positions) > 0:
     time.sleep(2)
     st.rerun()
+
