@@ -1,27 +1,17 @@
-# STREAMLIT UPLOAD - Pro Scanner
+# STREAMLIT UPLOAD - Pro Scanner (FIXED)
 
-## Just Upload These 6 Files to Streamlit:
+## Upload These 6 Files:
 
-1. scanner_qullamaggie_pro.py      (NEW - Pro scanner)
-2. ultimate_platform_ENHANCED.py   (UPDATED - Line 20 changed)
-3. config.py                       (Your Telegram settings)
-4. complete_tickers.py             (S&P 500 list)
-5. telegram_bot_fixed.py           (Telegram bot)
-6. requirements.txt                (Python packages)
+1. scanner_qullamaggie_pro.py      (FIXED - Sorting error resolved)
+2. ultimate_platform_ENHANCED.py   (Line 20 uses Pro scanner)
+3. config.py
+4. complete_tickers.py
+5. telegram_bot_fixed.py
+6. requirements.txt
 
-## That's It!
+## What Was Fixed:
+- Sorting error with rating_details dictionary
+- Now sorts by stars + total_score (numeric)
 
-The dashboard will automatically:
-✅ Use the Pro scanner
-✅ Show 5-star ratings
-✅ Detect VCP/Coiling
-✅ Track RS new highs
-✅ Find pocket pivots
+## Upload to Streamlit and it will work!
 
-## Deploy:
-1. Go to share.streamlit.io
-2. Find your app
-3. Upload these 6 files (replace old ones)
-4. App restarts automatically
-
-Done! 🚀

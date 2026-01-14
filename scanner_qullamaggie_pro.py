@@ -503,8 +503,11 @@ class QullamaggiePro:
         
         df = pd.DataFrame(all_setups)
         
-        # Sort by stars (highest first), then by prior move
-        df = df.sort_values(['stars', 'rating_details'], ascending=[False, False])
+        # Extract sortable score from rating_details
+        df['total_score'] = df['rating_details'].apply(lambda x: x.get('total_score', 0) if isinstance(x, dict) else 0)
+        
+        # Sort by stars (highest first), then by total score
+        df = df.sort_values(['stars', 'total_score'], ascending=[False, False])
         
         logger.info("=" * 80)
         logger.info(f"📊 SCAN COMPLETE: {len(df)} SETUPS FOUND")
