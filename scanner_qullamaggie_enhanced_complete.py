@@ -850,3 +850,190 @@ if __name__ == "__main__":
 
 # Compatibility alias
 QullamaggieEnhancedScanner = UltraScannerEngine
+
+
+
+# ======================================================================================
+# STATE TRACKER ADD-ON (Drop-in upgrade)
+# - Does NOT change UltraScannerEngine logic.
+# - Adds monitoring/entry/invalidation states derived from scan results (DataFrame).
+# - Streamlit can persist `st.session_state.setup_tracker` across reruns.
+# ======================================================================================
+
+from enum import Enum as _Enum
+from dataclasses import dataclass as _dataclass, asdict as _asdict
+from typing import Optional as _Optional, Dict as _Dict, Any as _Any, List as _List
+from datetime import datetime as _dt
+
+class SetupState(_Enum):
+    NONE = "NONE"
+    MONITORING = "MONITORING"
+    ENTRY_TRIGGERED = "ENTRY_TRIGGERED"
+    INVALIDATED = "INVALIDATED"
+
+@_dataclass
+class SetupRecord:
+    key: str
+    ticker: str
+    setup_type: str
+    state: str
+    first_seen: str
+    last_seen: str
+    last_state_change: str
+    score: float
+    entry: float
+    stop: float
+    current_price: float
+    notes: str = ""
+    miss_count: int = 0
+    invalid_reason: str = ""
+
+class SetupTracker:
+    """Tracks per-(ticker, setup_type) setup state across scans."""
+
+    def __init__(self):
+        self.records: _Dict[str, SetupRecord] = {}
+
+    def _now(self) -> str:
+        return _dt.utcnow().isoformat()
+
+    def update_from_results(self, results_df) -> _List[_Dict[str, _Any]]:
+        """Update states from UltraScannerEngine.run_full_scan() DataFrame.
+        Returns a list of state transition events:
+            [{ticker, setup_type, prev_state, new_state, reason, entry, stop, current_price, score}]
+        """
+        events = []
+        now = self._now()
+
+        if results_df is None or len(results_df) == 0:
+            # increment miss_count for everything and eventually prune
+            for k, rec in list(self.records.items()):
+                rec.miss_count += 1
+                rec.last_seen = now
+                if rec.miss_count >= 3:
+                    del self.records[k]
+            return events
+
+        # normalize columns we need
+        df = results_df.copy()
+        for col in ["ticker", "setup_type", "score", "entry", "stop", "current_price", "notes"]:
+            if col not in df.columns:
+                df[col] = None
+
+        seen_keys = set()
+
+        for _, row in df.iterrows():
+            ticker = str(row.get("ticker") or "").upper().strip()
+            setup_type = str(row.get("setup_type") or "SETUP").upper().strip()
+            key = f"{ticker}:{setup_type}"
+            seen_keys.add(key)
+
+            try:
+                entry = float(row.get("entry")) if row.get("entry") is not None else float("nan")
+            except Exception:
+                entry = float("nan")
+            try:
+                stop = float(row.get("stop")) if row.get("stop") is not None else float("nan")
+            except Exception:
+                stop = float("nan")
+            try:
+                current_price = float(row.get("current_price")) if row.get("current_price") is not None else float("nan")
+            except Exception:
+                current_price = float("nan")
+            try:
+                score = float(row.get("score")) if row.get("score") is not None else 0.0
+            except Exception:
+                score = 0.0
+
+            notes = str(row.get("notes") or "")
+
+            if key not in self.records:
+                # New setup becomes MONITORING by default unless already above entry/under stop
+                state = SetupState.MONITORING.value
+                reason = "new_setup"
+                if entry == entry and current_price == current_price and current_price >= entry:
+                    state = SetupState.ENTRY_TRIGGERED.value
+                    reason = "price_at_or_above_entry"
+                if stop == stop and current_price == current_price and current_price <= stop:
+                    state = SetupState.INVALIDATED.value
+                    reason = "price_at_or_below_stop"
+
+                rec = SetupRecord(
+                    key=key,
+                    ticker=ticker,
+                    setup_type=setup_type,
+                    state=state,
+                    first_seen=now,
+                    last_seen=now,
+                    last_state_change=now,
+                    score=score,
+                    entry=entry if entry == entry else 0.0,
+                    stop=stop if stop == stop else 0.0,
+                    current_price=current_price if current_price == current_price else 0.0,
+                    notes=notes,
+                )
+                self.records[key] = rec
+                events.append({
+                    "ticker": ticker, "setup_type": setup_type,
+                    "prev_state": SetupState.NONE.value, "new_state": state,
+                    "reason": reason, "entry": rec.entry, "stop": rec.stop,
+                    "current_price": rec.current_price, "score": rec.score
+                })
+            else:
+                rec = self.records[key]
+                prev_state = rec.state
+
+                # update fields
+                rec.last_seen = now
+                rec.miss_count = 0
+                rec.score = score
+                rec.entry = entry if entry == entry else rec.entry
+                rec.stop = stop if stop == stop else rec.stop
+                rec.current_price = current_price if current_price == current_price else rec.current_price
+                rec.notes = notes
+
+                # Determine new state
+                new_state = prev_state
+                reason = ""
+
+                # invalidation first
+                if rec.stop and rec.current_price <= rec.stop:
+                    new_state = SetupState.INVALIDATED.value
+                    reason = "stop_hit_or_broken"
+                    rec.invalid_reason = "Stop broken"
+                elif rec.entry and rec.current_price >= rec.entry:
+                    if prev_state != SetupState.ENTRY_TRIGGERED.value:
+                        new_state = SetupState.ENTRY_TRIGGERED.value
+                        reason = "entry_triggered"
+                else:
+                    # still monitoring if setup persists
+                    if prev_state == SetupState.INVALIDATED.value:
+                        # keep invalidated until it disappears and gets pruned
+                        new_state = prev_state
+                    else:
+                        new_state = SetupState.MONITORING.value
+
+                if new_state != prev_state:
+                    rec.state = new_state
+                    rec.last_state_change = now
+                    events.append({
+                        "ticker": ticker, "setup_type": setup_type,
+                        "prev_state": prev_state, "new_state": new_state,
+                        "reason": reason, "entry": rec.entry, "stop": rec.stop,
+                        "current_price": rec.current_price, "score": rec.score
+                    })
+
+        # handle missing setups (not returned this scan)
+        for k, rec in list(self.records.items()):
+            if k not in seen_keys:
+                rec.miss_count += 1
+                if rec.miss_count >= 3:
+                    del self.records[k]
+
+        return events
+
+    def to_dataframe(self):
+        import pandas as pd
+        if not self.records:
+            return pd.DataFrame([])
+        return pd.DataFrame([_asdict(r) for r in self.records.values()])
