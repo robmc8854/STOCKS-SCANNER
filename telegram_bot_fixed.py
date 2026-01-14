@@ -1,282 +1,269 @@
 """
-TELEGRAM BOT - UPGRADED VERSION
-- Keeps original alert sending methods (HTML support)
-- Adds /start menu + command processing helpers
-Designed to be polled from Streamlit (no always-on background required).
+TELEGRAM BOT - FIXED VERSION
+Handles alerts and messages with proper error handling
 """
 
-from __future__ import annotations
-
-import logging
-from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
-
 import requests
-import pandas as pd
+import logging
+from typing import Optional
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class TelegramConfig:
-    token: str
-    chat_id: str
-
-
 class TelegramBot:
     """
-    Telegram bot for sending trading alerts + processing commands (polled).
+    Telegram bot for sending trading alerts
     """
-    TELEGRAM_MAX_LEN = 3900
-
-    def __init__(self, token: str, chat_id: str, enabled: bool = True):
+    
+    def __init__(self, token: str, chat_id: str):
         self.token = token
-        self.chat_id = str(chat_id)
-        self.enabled = enabled and bool(token) and bool(chat_id)
-        self.base_url = f"https://api.telegram.org/bot{self.token}"
-        self._last_update_id: Optional[int] = None
-
-    # ----------------------------
-    # Internal helpers
-    # ----------------------------
-    def _chunk(self, text: str) -> List[str]:
-        if len(text) <= self.TELEGRAM_MAX_LEN:
-            return [text]
-        parts: List[str] = []
-        buf = ""
-        for line in text.splitlines():
-            if len(buf) + len(line) + 1 > self.TELEGRAM_MAX_LEN:
-                if buf:
-                    parts.append(buf)
-                    buf = ""
-            if len(line) > self.TELEGRAM_MAX_LEN:
-                for i in range(0, len(line), self.TELEGRAM_MAX_LEN):
-                    parts.append(line[i:i+self.TELEGRAM_MAX_LEN])
-            else:
-                buf = (buf + "\n" + line) if buf else line
-        if buf:
-            parts.append(buf)
-        return parts
-
-    def _post(self, method: str, data: Dict[str, Any]) -> bool:
+        self.chat_id = chat_id
+        self.base_url = f"https://api.telegram.org/bot{token}"
+        self.enabled = True
+        
+        # Test connection
+        if not self.test_connection():
+            logger.error("❌ Telegram connection failed!")
+            self.enabled = False
+        else:
+            logger.info("✅ Telegram connected successfully")
+    
+    def test_connection(self) -> bool:
+        """Test if bot token and chat ID are valid"""
+        try:
+            url = f"{self.base_url}/getMe"
+            response = requests.get(url, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('ok'):
+                    logger.info(f"✅ Bot connected: @{data['result'].get('username')}")
+                    return True
+            
+            logger.error(f"❌ Telegram API error: {response.status_code}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Telegram connection error: {e}")
+            return False
+    
+    def send_message(self, message: str, parse_mode: str = "HTML") -> bool:
+        """
+        Send a message via Telegram
+        
+        Args:
+            message: Message text (supports HTML)
+            parse_mode: "HTML" or "Markdown"
+        
+        Returns:
+            True if sent successfully
+        """
         if not self.enabled:
             logger.warning("⚠️ Telegram disabled - message not sent")
             return False
+        
         try:
-            url = f"{self.base_url}/{method}"
-            r = requests.post(url, data=data, timeout=20)
-            if not r.ok:
-                logger.warning("Telegram API error: %s", r.text)
-            return bool(r.ok)
+            url = f"{self.base_url}/sendMessage"
+            
+            payload = {
+                'chat_id': self.chat_id,
+                'text': message,
+                'parse_mode': parse_mode,
+                'disable_web_page_preview': True
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('ok'):
+                    logger.info(f"✅ Message sent to Telegram")
+                    return True
+                else:
+                    logger.error(f"❌ Telegram API error: {data.get('description')}")
+                    return False
+            else:
+                logger.error(f"❌ HTTP error {response.status_code}: {response.text}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            logger.error("❌ Telegram request timed out")
+            return False
         except Exception as e:
-            logger.exception("Telegram post failed: %s", e)
+            logger.error(f"❌ Error sending message: {e}")
+            return False
+    
+    def send_setup_alert(self, setup: dict) -> bool:
+        """Send formatted setup alert"""
+        try:
+            risk = setup['entry'] - setup['stop']
+            risk_pct = (risk / setup['entry']) * 100
+            
+            message = f"""
+🚀 <b>TRADE SIGNAL - {setup['ticker']}</b>
+
+✅ <b>Status: VALIDATED SETUP</b>
+
+📊 <b>Setup:</b> {setup.get('setup_type', 'BREAKOUT')}
+⭐ <b>Score:</b> {setup['score']}/100
+
+💰 <b>ENTRY:</b> ${setup['entry']:.2f}
+🛑 <b>STOP:</b> ${setup['stop']:.2f} ({risk_pct:.1f}%)
+🎯 <b>TARGET 1R:</b> ${setup['target_1R']:.2f} ({risk_pct:.1f}%)
+🎯 <b>TARGET 2R:</b> ${setup['target_2R']:.2f} ({risk_pct*2:.1f}%)
+
+📈 <b>R:R Ratio:</b> 1:2
+
+<b>📋 ENHANCED METRICS:</b>
+"""
+            
+            # Add Phase 2 metrics if available
+            if 'clenow_momentum' in setup:
+                message += f"• Clenow Momentum: {setup['clenow_momentum']:.3f}\n"
+            
+            if 'rs_vs_spy' in setup:
+                message += f"• RS vs SPY: {setup['rs_vs_spy']:.2f}x\n"
+            
+            if 'yz_volatility' in setup:
+                message += f"• YZ Volatility: {setup['yz_volatility']:.1f}%\n"
+            
+            # Add Phase 3 metrics if available
+            if 'trend_persistence' in setup:
+                trend = setup['trend_persistence']
+                trend_str = "Trending" if trend > 0 else "Mean-reverting"
+                message += f"• Trend: {trend_str} ({trend:.2f})\n"
+            
+            if 'sector' in setup:
+                message += f"• Sector: {setup['sector']}\n"
+            
+            message += f"\n<b>Notes:</b> {setup.get('notes', 'Top momentum setup')}"
+            
+            message += f"\n\n✅ <b>ACTION: PLACE TRADE</b>"
+            message += f"\n📱 <b>Follow Qullamaggie rules:</b>"
+            message += f"\n   • Enter at ${setup['entry']:.2f}"
+            message += f"\n   • Stop at ${setup['stop']:.2f}"
+            message += f"\n   • Scale out: 1/3 at 1R, 1/3 at 2R"
+            message += f"\n   • Trail stop with 10MA"
+            
+            return self.send_message(message)
+            
+        except Exception as e:
+            logger.error(f"Error formatting alert: {e}")
+            return False
+    
+    def send_scan_summary(self, scan_results: dict) -> bool:
+        """Send scan summary"""
+        try:
+            message = f"""
+📊 <b>SCAN COMPLETE - {datetime.now().strftime('%H:%M')}</b>
+
+🔍 Scanned: {scan_results.get('total_scanned', 0)} stocks
+✅ Found: {scan_results.get('setups_found', 0)} setups
+
+"""
+            
+            if scan_results.get('setups_found', 0) > 0:
+                message += f"⭐ Top Score: {scan_results.get('top_score', 0)}/100\n"
+                message += f"📈 Avg Score: {scan_results.get('avg_score', 0):.1f}/100\n"
+            else:
+                message += "No setups met strict Qullamaggie criteria today\n"
+            
+            message += f"\n⏰ Next scan: {scan_results.get('next_scan', 'N/A')}"
+            
+            return self.send_message(message)
+            
+        except Exception as e:
+            logger.error(f"Error sending summary: {e}")
+            return False
+    
+    def send_position_alert(self, position: dict, alert_type: str) -> bool:
+        """Send position management alert"""
+        try:
+            if alert_type == 'partial_profit':
+                message = f"""
+💰 <b>TAKE PARTIAL PROFITS - {position['ticker']}</b>
+
+📊 Entry: ${position['entry_price']:.2f}
+💵 Current: ${position['current_price']:.2f}
+📈 P&L: {position['pnl_pct']:.1f}%
+
+⚠️ <b>ACTION: SELL 1/3 TO 1/2</b>
+🛑 Move stop to breakeven
+
+Days held: {position.get('days_held', 0)}
+"""
+            
+            elif alert_type == 'trail_stop':
+                message = f"""
+🛑 <b>EXIT SIGNAL - {position['ticker']}</b>
+
+📊 Entry: ${position['entry_price']:.2f}
+💵 Current: ${position['current_price']:.2f}
+📉 Close below 10MA
+
+⚠️ <b>ACTION: EXIT POSITION</b>
+
+P&L: {position['pnl_pct']:.1f}%
+Days held: {position.get('days_held', 0)}
+"""
+            
+            else:
+                return False
+            
+            return self.send_message(message)
+            
+        except Exception as e:
+            logger.error(f"Error sending position alert: {e}")
+            return False
+    
+    def send_error(self, error_message: str) -> bool:
+        """Send error notification"""
+        try:
+            message = f"""
+⚠️ <b>SYSTEM ERROR</b>
+
+{error_message}
+
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            return self.send_message(message)
+        except:
             return False
 
-    def _get(self, method: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not self.enabled:
+
+def create_telegram_bot(token: str, chat_id: str) -> Optional[TelegramBot]:
+    """
+    Create and test Telegram bot
+    
+    Returns:
+        TelegramBot instance or None if failed
+    """
+    try:
+        bot = TelegramBot(token, chat_id)
+        if bot.enabled:
+            return bot
+        else:
+            logger.error("Telegram bot disabled due to connection failure")
             return None
-        try:
-            url = f"{self.base_url}/{method}"
-            r = requests.get(url, params=params, timeout=25)
-            if not r.ok:
-                return None
-            data = r.json()
-            if not data.get("ok"):
-                return None
-            return data
-        except Exception:
-            return None
-
-    # ----------------------------
-    # Original send methods (compat)
-    # ----------------------------
-    def send_message(self, message: str, parse_mode: str = "HTML", disable_web_page_preview: bool = True) -> bool:
-        """
-        Send a message (supports HTML by default).
-        Auto-chunks long messages.
-        """
-        ok = True
-        for part in self._chunk(message):
-            payload = {
-                "chat_id": self.chat_id,
-                "text": part,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": disable_web_page_preview,
-            }
-            ok = self._post("sendMessage", payload) and ok
-        return ok
-
-    # Backward-compatible alias
-    def send_telegram_alert(self, message: str, photo_url: Optional[str] = None) -> bool:
-        ok = self.send_message(message, parse_mode="HTML", disable_web_page_preview=True)
-        if photo_url:
-            self._post("sendPhoto", {"chat_id": self.chat_id, "photo": photo_url, "caption": "Trade Setup Chart"})
-        return ok
-
-    def send_error(self, error: str) -> bool:
-        return self.send_message(f"❌ <b>Error</b>\n\n<code>{error}</code>", parse_mode="HTML")
-
-    def test_connection(self) -> bool:
-        data = self._get("getMe", {})
-        return bool(data)
-
-    def send_scan_summary(self, count: int, market_condition: str = "") -> bool:
-        msg = f"🔍 <b>SCAN COMPLETE</b>\n\n✅ Setups found: <b>{count}</b>"
-        if market_condition:
-            msg += f"\n📊 Market: <b>{market_condition}</b>"
-        return self.send_message(msg)
-
-    def send_setup_alert(self, ticker: str, setup_type: str, entry: float, stop: float, score: float, notes: str = "") -> bool:
-        tv = f"https://www.tradingview.com/chart/?symbol=NASDAQ:{ticker}"
-        msg = (
-            f"🚨 <b>TRADE SETUP</b>\n\n"
-            f"🎯 <b>{ticker}</b> | <b>{setup_type}</b>\n"
-            f"⭐ Score: <b>{score:.0f}</b>\n"
-            f"📍 Entry: <b>{entry:.2f}</b>\n"
-            f"🛑 Stop: <b>{stop:.2f}</b>\n"
-        )
-        if notes:
-            msg += f"📝 {notes}\n"
-        msg += f"\n📈 <a href='{tv}'>TradingView Chart</a>"
-        return self.send_message(msg, parse_mode="HTML", disable_web_page_preview=False)
-
-    def send_position_alert(self, ticker: str, action: str, price: float, pnl: Optional[float] = None) -> bool:
-        msg = f"💼 <b>POSITION UPDATE</b>\n\n{action}: <b>{ticker}</b> @ <b>{price:.2f}</b>"
-        if pnl is not None:
-            msg += f"\nP&L: <b>{pnl:.2f}</b>"
-        return self.send_message(msg)
-
-    # ----------------------------
-    # New: /start menu + commands
-    # ----------------------------
-    def install_commands(self) -> bool:
-        """
-        Registers command list in Telegram UI (menu).
-        """
-        commands = [
-            {"command": "start", "description": "Show menu"},
-            {"command": "help", "description": "Help / commands"},
-            {"command": "dashboard", "description": "Setup tracker snapshot"},
-            {"command": "monitoring", "description": "Monitoring setups"},
-            {"command": "forming", "description": "Forming setups"},
-            {"command": "entries", "description": "Entry triggered"},
-            {"command": "invalidated", "description": "Invalidated"},
-            {"command": "ticker", "description": "Ticker detail: /ticker TSLA"},
-        ]
-        return self._post("setMyCommands", {"commands": str(commands).replace("'", '"')})  # JSON-ish
-
-    def _menu_text(self) -> str:
-        return (
-            "👋 <b>Stocks Scanner Bot</b>\n\n"
-            "Commands:\n"
-            "• /dashboard — snapshot counts\n"
-            "• /monitoring — monitoring setups\n"
-            "• /forming — setups forming\n"
-            "• /entries — entry triggered\n"
-            "• /invalidated — invalidated\n"
-            "• /ticker TSLA — ticker detail + TradingView link\n\n"
-            "Tip: Run a scan in Streamlit so results are fresh."
-        )
-
-    def get_updates(self) -> List[Dict[str, Any]]:
-        params: Dict[str, Any] = {}
-        if self._last_update_id is not None:
-            params["offset"] = self._last_update_id + 1
-        data = self._get("getUpdates", params)
-        if not data:
-            return []
-        res = data.get("result", [])
-        if res:
-            self._last_update_id = res[-1].get("update_id", self._last_update_id)
-        return res
-
-    def read_commands(self) -> List[str]:
-        cmds: List[str] = []
-        for upd in self.get_updates():
-            msg = upd.get("message") or upd.get("edited_message") or {}
-            text = (msg.get("text") or "").strip()
-            if text.startswith("/"):
-                cmds.append(text)
-        return cmds
-
-    def reply_to_commands(self, commands: List[str], df: pd.DataFrame, snapshot_text: Optional[str] = None) -> None:
-        """
-        Reply to a list of commands using provided tracker dataframe (ticker/state/etc).
-        """
-        if df is None:
-            df = pd.DataFrame()
-
-        def send_df(title: str, sub: pd.DataFrame, max_rows: int = 15):
-            if sub is None or sub.empty:
-                self.send_message(f"{title}: none right now.", parse_mode="HTML")
-                return
-            d = sub.head(max_rows).copy()
-            # keep important cols
-            cols = [c for c in ["ticker","state","setup_type","score","last_price","entry","stop","% to entry"] if c in d.columns]
-            if cols:
-                d = d[cols]
-            text = d.to_string(index=False)
-            self.send_message(f"<b>{title}</b>\n<code>{text}</code>", parse_mode="HTML")
-
-        for cmd in commands:
-            c = cmd.strip()
-            low = c.lower()
-
-            if low.startswith("/start") or low.startswith("/help"):
-                self.send_message(self._menu_text(), parse_mode="HTML", disable_web_page_preview=True)
-
-            elif low.startswith("/dashboard"):
-                if snapshot_text:
-                    self.send_message(snapshot_text, parse_mode="HTML")
-                else:
-                    # derive counts
-                    if df.empty or "state" not in df.columns:
-                        self.send_message("📊 <b>Dashboard</b>\n\nNo data yet. Run a scan.", parse_mode="HTML")
-                    else:
-                        counts = df["state"].value_counts().to_dict()
-                        msg = "📊 <b>Dashboard</b>\n\n"
-                        for k,v in counts.items():
-                            msg += f"• {k}: <b>{v}</b>\n"
-                        self.send_message(msg, parse_mode="HTML")
-
-            elif low.startswith("/monitoring"):
-                send_df("🟡 Monitoring", df[df.get("state","")=="MONITORING"])
-
-            elif low.startswith("/forming"):
-                send_df("🔵 Forming", df[df.get("state","")=="FORMING"])
-
-            elif low.startswith("/entries"):
-                send_df("🟢 Entries", df[df.get("state","")=="ENTRY_TRIGGERED"])
-
-            elif low.startswith("/invalidated"):
-                send_df("🔴 Invalidated", df[df.get("state","")=="INVALIDATED"])
-
-            elif low.startswith("/ticker"):
-                parts = c.split()
-                if len(parts) < 2:
-                    self.send_message("Usage: /ticker TSLA", parse_mode="HTML")
-                else:
-                    sym = parts[1].upper()
-                    sub = df[df.get("ticker","")==sym] if not df.empty else pd.DataFrame()
-                    if sub.empty:
-                        self.send_message(f"No data for {sym}. Run a scan.", parse_mode="HTML")
-                    else:
-                        row = sub.iloc[0].to_dict()
-                        tv = f"https://www.tradingview.com/chart/?symbol=NASDAQ:{sym}"
-                        msg = (
-                            f"📌 <b>{sym}</b>\n"
-                            f"State: <b>{row.get('state')}</b>\n"
-                            f"Setup: <b>{row.get('setup_type')}</b>\n"
-                            f"Score: <b>{row.get('score')}</b>\n"
-                            f"Last: <b>{row.get('last_price')}</b>\n"
-                            f"Entry: <b>{row.get('entry')}</b>\n"
-                            f"Stop: <b>{row.get('stop')}</b>\n"
-                            f"\n📈 <a href='{tv}'>TradingView Chart</a>"
-                        )
-                        self.send_message(msg, parse_mode="HTML", disable_web_page_preview=False)
-            else:
-                self.send_message("Unknown command. Send /start for menu.", parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Failed to create Telegram bot: {e}")
+        return None
 
 
-def create_telegram_bot(token: str, chat_id: str, **kwargs) -> TelegramBot:
-    return TelegramBot(token=token, chat_id=str(chat_id))
+# Convenience function for dashboard
+def send_telegram_alert(bot: Optional[TelegramBot], message: str) -> bool:
+    """
+    Send message via telegram bot if available
+    
+    Args:
+        bot: TelegramBot instance or None
+        message: Message to send
+    
+    Returns:
+        True if sent, False otherwise
+    """
+    if bot is None:
+        logger.warning("⚠️ Telegram bot not available")
+        return False
+    
+    return bot.send_message(message)

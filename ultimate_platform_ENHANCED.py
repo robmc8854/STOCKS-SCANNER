@@ -17,138 +17,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-try:
-    from scanner_qullamaggie_enhanced_complete import UltraScannerEngine  # type: ignore
-except Exception:
-    # Fallback: load directly from file (Streamlit Cloud import-safe)
-    import importlib.util as _ilu
-    _p = Path(__file__).resolve().parent / 'scanner_qullamaggie_enhanced_complete.py'
-    _spec = _ilu.spec_from_file_location('scanner_qullamaggie_enhanced_complete', _p)
-    _mod = _ilu.module_from_spec(_spec)  # type: ignore
-    assert _spec and _spec.loader
-    _spec.loader.exec_module(_mod)  # type: ignore
-    UltraScannerEngine = _mod.UltraScannerEngine
+from scanner_qullamaggie_enhanced_complete import UltraScannerEngine
 from config import config
-
-# =============================================================================
-# SETUP TRACKER (Monitoring -> Entry -> Invalidated)
-# =============================================================================
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Dict as _Dict, Any as _Any, Optional as _Optional
-
-class SetupState(str, Enum):
-    FORMING = "FORMING"
-    MONITORING = "MONITORING"
-    ENTRY_TRIGGERED = "ENTRY_TRIGGERED"
-    INVALIDATED = "INVALIDATED"
-
-@dataclass
-class TrackedSetup:
-    ticker: str
-    setup_type: str
-    score: float
-    entry: float
-    stop: float
-    notes: str = ""
-    state: SetupState = SetupState.FORMING
-    last_price: _Optional[float] = None
-    last_update: datetime = field(default_factory=datetime.utcnow)
-
-class SetupTracker:
-    def __init__(self):
-        self.setups: _Dict[str, TrackedSetup] = {}
-
-    def ingest_scan_results(self, df: pd.DataFrame):
-        if df is None or df.empty:
-            return
-        for _, row in df.iterrows():
-            t = str(row.get("ticker", "")).upper()
-            if not t:
-                continue
-            setup = self.setups.get(t)
-            if setup is None:
-                self.setups[t] = TrackedSetup(
-                    ticker=t,
-                    setup_type=str(row.get("setup_type","")),
-                    score=float(row.get("score", 0)),
-                    entry=float(row.get("entry", 0)),
-                    stop=float(row.get("stop", 0)),
-                    notes=str(row.get("notes","")),
-                    state=SetupState.FORMING,
-                )
-            else:
-                # refresh key fields
-                setup.setup_type = str(row.get("setup_type",""))
-                setup.score = float(row.get("score", setup.score))
-                setup.entry = float(row.get("entry", setup.entry))
-                setup.stop = float(row.get("stop", setup.stop))
-                setup.notes = str(row.get("notes", setup.notes))
-                setup.last_update = datetime.utcnow()
-
-    def update_prices_and_states(self):
-        if not self.setups:
-            return
-        tickers = list(self.setups.keys())
-        try:
-            data = yf.download(tickers, period="5d", interval="1d", progress=False, group_by="ticker", auto_adjust=False)
-        except Exception:
-            data = None
-
-        for t in tickers:
-            setup = self.setups[t]
-            price = None
-            try:
-                if isinstance(data, pd.DataFrame) and not data.empty:
-                    if ("Close" in data.columns) and (t in data.columns.get_level_values(0)):
-                        price = float(data[t]["Close"].dropna().iloc[-1])
-                    elif "Close" in data.columns and t in data.index.names:
-                        price = float(data["Close"].dropna().iloc[-1])
-            except Exception:
-                price = None
-
-            if price is None:
-                continue
-
-            setup.last_price = price
-            setup.last_update = datetime.utcnow()
-
-            # State rules
-            if setup.state != SetupState.INVALIDATED:
-                if price <= setup.stop:
-                    setup.state = SetupState.INVALIDATED
-                elif price >= setup.entry:
-                    setup.state = SetupState.ENTRY_TRIGGERED
-                else:
-                    # FORMING vs MONITORING based on proximity to entry
-                    dist = abs(setup.entry - price) / setup.entry if setup.entry else 1.0
-                    setup.state = SetupState.MONITORING if dist <= 0.02 else SetupState.FORMING
-
-    def to_dataframe(self) -> pd.DataFrame:
-        if not self.setups:
-            return pd.DataFrame()
-        rows = []
-        for s in self.setups.values():
-            rows.append({
-                "ticker": s.ticker,
-                "state": s.state.value,
-                "setup_type": s.setup_type,
-                "score": s.score,
-                "last_price": s.last_price,
-                "entry": s.entry,
-                "stop": s.stop,
-                "% to entry": (None if s.last_price is None or not s.entry else round((s.entry - s.last_price)/s.entry*100, 2)),
-                "notes": s.notes,
-                "last_update": s.last_update,
-            })
-        df = pd.DataFrame(rows)
-        df = df.sort_values(["state","score"], ascending=[True, False])
-        return df
-
-# Initialize tracker in session state
-if "setup_tracker" not in st.session_state:
-    st.session_state.setup_tracker = SetupTracker()
-
 from complete_tickers import COMPLETE_TICKERS
 import requests
 # from position_manager import QullamaggiePositionManager, format_position_alert, check_and_alert_positions
@@ -809,11 +679,6 @@ def calculate_performance_metrics(trades):
 if 'account' not in st.session_state:
     st.session_state.account = TradingAccount(config.ACCOUNT_SIZE)
     st.session_state.scanner = UltraScannerEngine(COMPLETE_TICKERS)
-    # Ensure scanner has universe + data provider (required for run_full_scan() with no args)
-    try:
-        st.session_state.scanner.set_universe(st.session_state.universe_tickers, get_stock_data)
-    except Exception:
-        pass
     # st.session_state.position_manager = None  # Disabled
     st.session_state.last_position_check = None
     st.session_state.last_morning_report_date = None
@@ -895,13 +760,8 @@ if st.session_state.auto_scan_enabled:
     
     if should_scan:
         # Run scan automatically
-        # Refresh scanner universe/provider before scan
-        st.session_state.scanner.set_universe(st.session_state.universe_tickers, get_stock_data)
         results = st.session_state.scanner.run_full_scan()
         st.session_state.scan_results = results
-        # Update setup tracker with new scan results
-        st.session_state.setup_tracker.ingest_scan_results(results)
-        st.session_state.setup_tracker.update_prices_and_states()
         st.session_state.last_scan_time = datetime.now()
         
         # Auto-validate and send alerts (ONLY NEW ONES)
@@ -1036,7 +896,7 @@ with st.sidebar:
     
     page = st.radio(
         "Navigation Menu",
-        ["🔍 Scanner", "🧠 Setup Monitor", "💼 Positions", "⭐ Watchlist", "📖 Journal", 
+        ["🔍 Scanner", "💼 Positions", "⭐ Watchlist", "📖 Journal", 
          "📈 Analytics", "⚠️ Risk Management", "⚙️ Settings"]
     )
     
@@ -1058,52 +918,6 @@ with st.sidebar:
         
         avg_r = sum(t['r_multiple'] for t in account.closed_trades) / len(account.closed_trades)
         st.markdown(f"**Avg R-Multiple:** {avg_r:.2f}R")
-
-
-    st.markdown("---")
-    st.markdown("### 🤖 Telegram Commands")
-    st.caption("Install the /start menu, then process commands (Streamlit-safe).")
-    try:
-        from telegram_bot_fixed import create_telegram_bot as _ctb
-        _tg_bot = _ctb(config.TELEGRAM_TOKEN, config.TELEGRAM_CHAT_ID)
-    except Exception:
-        _tg_bot = None
-
-    if _tg_bot:
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            if st.button("📌 Install /start menu", use_container_width=True):
-                try:
-                    _tg_bot.install_commands()
-                    st.success("Installed ✅")
-                except Exception as e:
-                    st.error("Install failed")
-        with col_t2:
-            auto_poll = st.checkbox("Auto-process (while open)", value=False)
-
-        if st.button("💬 Process Telegram Commands", use_container_width=True):
-            try:
-                cmds = _tg_bot.read_commands()
-                if not cmds:
-                    st.info("No new commands.")
-                else:
-                    # Build a compact dataframe for replies
-                    df_track = st.session_state.setup_tracker.to_dataframe()
-                    _tg_bot.reply_to_commands(commands=cmds, df=df_track, snapshot_text=None)
-                    st.success(f"Replied to {len(cmds)} command(s).")
-            except Exception:
-                st.error("Command processing failed.")
-
-        if 'auto_poll' in locals() and auto_poll:
-            try:
-                cmds = _tg_bot.read_commands()
-                if cmds:
-                    df_track = st.session_state.setup_tracker.to_dataframe()
-                    _tg_bot.reply_to_commands(commands=cmds, df=df_track, snapshot_text=None)
-            except Exception:
-                pass
-    else:
-        st.caption("Telegram bot not available (check telegram_bot_fixed.py).")
 
 # MAIN CONTENT
 st.markdown("---")
@@ -1438,60 +1252,6 @@ if 9 <= current_time_check.hour < 16:
 # ============================================================================
 # TAB 2: POSITIONS - LIVE TRACKING
 # ============================================================================
-
-elif page == "🧠 Setup Monitor":
-    st.header("🧠 SETUP MONITOR — FORMING → MONITORING → ENTRY → INVALIDATED")
-    st.markdown("This page tracks setups across scans and updates their state based on live prices. Includes TradingView links and quick charts.")
-
-    colA, colB, colC = st.columns([2,1,1])
-    with colA:
-        st.markdown("### Controls")
-        if st.button("🔄 Update Prices & States", use_container_width=True):
-            st.session_state.setup_tracker.update_prices_and_states()
-            st.success("Updated states.")
-    with colB:
-        st.metric("Tracked Setups", len(st.session_state.setup_tracker.setups))
-    with colC:
-        st.metric("Last Update", datetime.utcnow().strftime("%H:%M:%S UTC"))
-
-    df_track = st.session_state.setup_tracker.to_dataframe()
-    if df_track.empty:
-        st.info("No tracked setups yet. Run a FULL SCAN first.")
-    else:
-        # TradingView link column
-        df_track["chart"] = df_track["ticker"].apply(lambda t: f"https://www.tradingview.com/chart/?symbol=NASDAQ:{t}")
-        df_show = df_track.copy()
-        df_show["chart"] = df_show["chart"].apply(lambda u: f"[📈 Chart]({u})")
-
-        st.subheader("📋 All Tracked Setups")
-        st.dataframe(
-            df_show,
-            use_container_width=True,
-            column_config={"chart": st.column_config.MarkdownColumn("TradingView")}
-        )
-
-        st.divider()
-        st.subheader("🔎 Quick View")
-        pick = st.selectbox("Select ticker", df_track["ticker"].tolist())
-        sel = df_track[df_track["ticker"]==pick].iloc[0].to_dict()
-        st.markdown(f"**{pick}** • **{sel['state']}** • Setup **{sel['setup_type']}** • Score **{sel['score']}**")
-        st.markdown(f"**Entry:** {sel['entry']}  |  **Stop:** {sel['stop']}  |  **Last:** {sel['last_price']}")
-        st.markdown(f"**Notes:** {sel.get('notes','')}")
-        st.markdown(f"**TradingView:** [Open chart](https://www.tradingview.com/chart/?symbol=NASDAQ:{pick})")
-
-        # Optional in-app chart
-        try:
-            hist = yf.download(pick, period="6mo", interval="1d", progress=False)
-            if hist is not None and not hist.empty:
-                fig = go.Figure(data=[go.Candlestick(
-                    x=hist.index,
-                    open=hist["Open"], high=hist["High"], low=hist["Low"], close=hist["Close"]
-                )])
-                fig.update_layout(height=450, margin=dict(l=10, r=10, t=30, b=10))
-                st.plotly_chart(fig, use_container_width=True)
-        except Exception:
-            st.info("Chart unavailable right now.")
-
 elif page == "💼 Positions":
     col_head1, col_head2 = st.columns([3, 1])
     
@@ -2079,3 +1839,4 @@ col4.markdown(f"**Features:** ALL 234 ACTIVE")
 if len(account.positions) > 0:
     time.sleep(2)
     st.rerun()
+
