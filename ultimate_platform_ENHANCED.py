@@ -809,6 +809,11 @@ def calculate_performance_metrics(trades):
 if 'account' not in st.session_state:
     st.session_state.account = TradingAccount(config.ACCOUNT_SIZE)
     st.session_state.scanner = UltraScannerEngine(COMPLETE_TICKERS)
+        # Ensure scanner has universe + data provider (required for run_full_scan() with no args)
+        try:
+            st.session_state.scanner.set_universe(st.session_state.universe_tickers, get_stock_data)
+        except Exception:
+            pass
     # st.session_state.position_manager = None  # Disabled
     st.session_state.last_position_check = None
     st.session_state.last_morning_report_date = None
@@ -890,6 +895,8 @@ if st.session_state.auto_scan_enabled:
     
     if should_scan:
         # Run scan automatically
+                    # Refresh scanner universe/provider before scan
+                    st.session_state.scanner.set_universe(st.session_state.universe_tickers, get_stock_data)
         results = st.session_state.scanner.run_full_scan()
         st.session_state.scan_results = results
         # Update setup tracker with new scan results
