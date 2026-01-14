@@ -941,6 +941,16 @@ if page == "🔍 Scanner":
             st.info(f"📊 Scores: {sorted(st.session_state.scan_results['score'].values, reverse=True)}")
     else:
         st.info("📭 No scan results yet - click 'FULL SCAN' to start")
+    # --- Always-available raw results table (so you can SEE the scan output immediately) ---
+    if isinstance(st.session_state.scan_results, pd.DataFrame) and not st.session_state.scan_results.empty:
+        with st.expander('📊 View FULL scan results (raw table)', expanded=True):
+            df_show = st.session_state.scan_results.copy()
+            # Ensure TradingView column is clickable
+            if 'tradingview' in df_show.columns:
+                df_show['tradingview'] = df_show['tradingview'].apply(lambda u: f'[Chart]({u})')
+                st.dataframe(df_show, use_container_width=True, column_config={'tradingview': st.column_config.MarkdownColumn('TradingView')})
+            else:
+                st.dataframe(df_show, use_container_width=True)
     
     col1, col2, col3 = st.columns([2,2,6])
     
