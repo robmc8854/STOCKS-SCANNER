@@ -17,7 +17,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner_qullamaggie_enhanced_complete import UltraScannerEngine
+from scanner_qullamaggie_pro import UltraScannerEngine
 from config import config
 from complete_tickers import COMPLETE_TICKERS
 import requests
