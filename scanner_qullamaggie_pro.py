@@ -506,6 +506,11 @@ class QullamaggiePro:
         # Extract sortable score from rating_details
         df['total_score'] = df['rating_details'].apply(lambda x: x.get('total_score', 0) if isinstance(x, dict) else 0)
         
+        # Add 'score' column for backward compatibility (convert stars to 0-100 scale)
+        # 5 stars = 100, 4 stars = 85, 3 stars = 75, 2 stars = 65, 1 star = 55
+        star_to_score = {5: 100, 4: 85, 3: 75, 2: 65, 1: 55, 0: 50}
+        df['score'] = df['stars'].map(star_to_score)
+        
         # Sort by stars (highest first), then by total score
         df = df.sort_values(['stars', 'total_score'], ascending=[False, False])
         
