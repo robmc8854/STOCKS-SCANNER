@@ -1,23 +1,18 @@
 # telegram_bot_fixed.py
 # FULL DROP-IN FILE — Upgraded Telegram for STOCKS-SCANNER
 #
-# Goals:
-# - Keep your existing behavior: trade alerts + TradingView chart link
-# - Add dashboard-like commands support (/dashboard, /monitoring, /entries, etc.)
-# - Be Streamlit-safe: no background threads required; "poll once" design
-# - Be robust against Telegram message length limits (auto-chunking)
-#
-# Provides:
-#   create_telegram_bot(token, chat_id)  ✅ required by your Streamlit app
-#   TelegramBot.send_trade_alert(...)    ✅ keep existing workflow
-#   TelegramBot.read_commands()          ✅ optional command polling
-#   TelegramBot.send_dataframe(...)      ✅ replicate dashboard tables
+# - Provides create_telegram_bot(token, chat_id) expected by Streamlit app
+# - Keeps trade alert + TradingView chart link workflow
+# - Adds send_dataframe for dashboard-style tables
+# - Adds read_commands() for on-demand command processing (Streamlit-safe)
+# - Auto-chunks long messages to avoid Telegram limits
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 import urllib.parse
+
 import requests
 import pandas as pd
 
@@ -29,60 +24,52 @@ class TelegramConfig:
 
 
 class TelegramBot:
-    """
-    Backward-compatible Telegram client.
-    Works in Streamlit by calling methods on-demand (no loops needed).
-    """
-
-    TELEGRAM_MAX_LEN = 3900  # keep under hard limits
+    TELEGRAM_MAX_LEN = 3900  # safety margin under Telegram hard limit
 
     def __init__(self, token: str, chat_id: str):
         self.cfg = TelegramConfig(token=token, chat_id=str(chat_id))
         self.base_url = f"https://api.telegram.org/bot{self.cfg.token}"
-        self._last_update_id: Optional[int] = None  # used for polling commands
+        self._last_update_id: Optional[int] = None
 
     # ------------------
-    # Internal helpers
+    # Utils
     # ------------------
-    def _post(self, method: str, json_payload: Optional[Dict[str, Any]] = None, data_payload: Optional[Dict[str, Any]] = None) -> bool:
-        try:
-            url = f"{self.base_url}/{method}"
-            if json_payload is not None:
-                r = requests.post(url, json=json_payload, timeout=20)
-            else:
-                r = requests.post(url, data=data_payload, timeout=20)
-            return bool(r.ok)
-        except Exception:
-            return False
-
     def _chunk_text(self, text: str, max_len: int) -> List[str]:
         if len(text) <= max_len:
             return [text]
         chunks: List[str] = []
-        lines = text.splitlines(keepends=False)
+        lines = text.splitlines()
         buf = ""
         for line in lines:
             if len(buf) + len(line) + 1 > max_len:
                 if buf:
                     chunks.append(buf)
                     buf = ""
-            if len(line) > max_len:
-                # hard split long line
-                for i in range(0, len(line), max_len):
-                    part = line[i:i+max_len]
-                    if part:
-                        if buf:
-                            chunks.append(buf)
-                            buf = ""
-                        chunks.append(part)
-            else:
-                buf = (buf + "\n" + line) if buf else line
+            # split very long lines
+            while len(line) > max_len:
+                chunks.append(line[:max_len])
+                line = line[max_len:]
+            buf = (buf + "\n" + line) if buf else line
         if buf:
             chunks.append(buf)
         return chunks
 
+    def _post_json(self, method: str, payload: Dict[str, Any]) -> bool:
+        try:
+            r = requests.post(f"{self.base_url}/{method}", json=payload, timeout=20)
+            return bool(r.ok)
+        except Exception:
+            return False
+
+    def _post_data(self, method: str, payload: Dict[str, Any]) -> bool:
+        try:
+            r = requests.post(f"{self.base_url}/{method}", data=payload, timeout=20)
+            return bool(r.ok)
+        except Exception:
+            return False
+
     # ------------------
-    # Low-level senders
+    # Senders
     # ------------------
     def send_text(self, text: str, disable_web_page_preview: bool = False) -> bool:
         ok = True
@@ -92,17 +79,17 @@ class TelegramBot:
                 "text": part,
                 "disable_web_page_preview": disable_web_page_preview,
             }
-            ok = self._post("sendMessage", json_payload=payload) and ok
+            ok = self._post_json("sendMessage", payload) and ok
         return ok
 
     def send_photo_url(self, photo_url: str, caption: Optional[str] = None) -> bool:
         payload = {"chat_id": self.cfg.chat_id, "photo": photo_url}
         if caption:
             payload["caption"] = caption[:900]
-        return self._post("sendPhoto", data_payload=payload)
+        return self._post_data("sendPhoto", payload)
 
     # ------------------
-    # TradingView helper
+    # TradingView
     # ------------------
     @staticmethod
     def tradingview_chart_link(symbol: str, exchange: str = "NASDAQ") -> str:
@@ -114,7 +101,7 @@ class TelegramBot:
         return self.send_text(f"📈 TradingView: {link}", disable_web_page_preview=False)
 
     # ------------------
-    # Backward-compatible "trade found" message
+    # Trade alerts (keep existing workflow)
     # ------------------
     def send_trade_alert(
         self,
@@ -138,27 +125,23 @@ class TelegramBot:
         if notes:
             parts.append(notes)
 
-        # Keep your current workflow: alert + then TradingView link
         self.send_text("\n".join(parts), disable_web_page_preview=True)
         self.send_tradingview_chart(symbol, exchange=exchange)
 
     # ------------------
-    # Dashboard-like tables
+    # Dashboard-style tables
     # ------------------
     def send_dataframe(self, df: pd.DataFrame, title: str = "", max_rows: int = 15) -> None:
         if df is None or df.empty:
             self.send_text(f"{title}: none right now." if title else "None right now.")
             return
 
-        # limit size
         df2 = df.head(max_rows).copy()
+        if df2.shape[1] > 10:
+            df2 = df2.iloc[:, :10]
 
-        # Compact columns: keep first ~9
-        if df2.shape[1] > 9:
-            df2 = df2.iloc[:, :9]
-
-        txt = df2.to_string(index=False)
-        msg = f"{title}\n{txt}" if title else txt
+        text = df2.to_string(index=False)
+        msg = f"{title}\n{text}" if title else text
         self.send_text(msg, disable_web_page_preview=True)
 
     # ------------------
@@ -192,19 +175,13 @@ class TelegramBot:
         return msg.get("text")
 
     def read_commands(self) -> List[str]:
-        """
-        Returns messages starting with '/' since the last poll.
-        """
-        commands: List[str] = []
+        cmds: List[str] = []
         for upd in self.get_updates(timeout=0):
             text = self._extract_text(upd)
             if text and text.strip().startswith("/"):
-                commands.append(text.strip())
-        return commands
+                cmds.append(text.strip())
+        return cmds
 
 
 def create_telegram_bot(token: str, chat_id: str, **kwargs) -> TelegramBot:
-    """
-    Backward-compatible factory expected by ultimate_platform_ENHANCED.py
-    """
     return TelegramBot(token=token, chat_id=str(chat_id))

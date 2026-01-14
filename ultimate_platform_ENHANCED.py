@@ -1,13 +1,7 @@
 # ultimate_platform_ENHANCED.py
 # FULL DROP-IN FILE — Streamlit Cloud Safe
-# - Robust import of telegram_bot_fixed.py (fixes create_telegram_bot import crash)
-# - Uses Qullamaggie scanner state monitoring
-# - Adds dashboard-like monitoring sections + Telegram command processing
-#
-# EXPECTS (in same folder):
-#   - scanner_qullamaggie_enhanced_complete.py
-#   - telegram_bot_fixed.py
-#   - complete_tickers.py  (recommended; else fallback list used)
+# Fixes import issues for BOTH telegram_bot_fixed.py and scanner_qullamaggie_enhanced_complete.py
+# Adds dashboard-like Setup Monitor sections + Telegram commands (processed on-demand)
 
 from __future__ import annotations
 
@@ -26,46 +20,63 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-# ==========================================================
-# ROBUST TELEGRAM IMPORT (fixes your crash)
-# ==========================================================
-def _load_create_telegram_bot():
+
+def _load_module_attr(py_filename: str, module_name: str, attr_name: str):
     """
-    Streamlit Cloud can be picky about imports. This loader guarantees
-    telegram_bot_fixed.py is loaded from the same folder as this file.
+    Robustly load an attribute from a local .py file in the same folder,
+    even when Streamlit Cloud import paths are inconsistent.
     """
+    # 1) Try normal import first
     try:
-        from telegram_bot_fixed import create_telegram_bot  # type: ignore
-        return create_telegram_bot
+        module = __import__(module_name, fromlist=[attr_name])
+        return getattr(module, attr_name)
     except Exception:
-        bot_path = BASE_DIR / "telegram_bot_fixed.py"
-        if not bot_path.exists():
-            raise ImportError("telegram_bot_fixed.py not found next to ultimate_platform_ENHANCED.py")
-        spec = importlib.util.spec_from_file_location("telegram_bot_fixed", bot_path)
-        module = importlib.util.module_from_spec(spec)  # type: ignore
-        assert spec and spec.loader
-        spec.loader.exec_module(module)  # type: ignore
-        return module.create_telegram_bot
+        pass
 
+    # 2) Fallback: load directly from disk
+    file_path = BASE_DIR / py_filename
+    if not file_path.exists():
+        raise ImportError(f"{py_filename} not found next to {Path(__file__).name}")
 
-create_telegram_bot = _load_create_telegram_bot()
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)  # type: ignore
+    assert spec and spec.loader
+    spec.loader.exec_module(module)  # type: ignore
+    if not hasattr(module, attr_name):
+        raise ImportError(f"{py_filename} loaded, but missing '{attr_name}'")
+    return getattr(module, attr_name)
+
 
 # ==========================================================
-# IMPORT YOUR SCANNER
+# TELEGRAM IMPORT (robust)
 # ==========================================================
-try:
-    from scanner_qullamaggie_enhanced_complete import (
-        run_scan,
-        setup_store,
-        SetupState,
-    )
-except Exception as e:
-    st.error("❌ Failed to import scanner_qullamaggie_enhanced_complete.py")
-    st.exception(e)
-    st.stop()
+create_telegram_bot = _load_module_attr(
+    py_filename="telegram_bot_fixed.py",
+    module_name="telegram_bot_fixed",
+    attr_name="create_telegram_bot",
+)
 
 # ==========================================================
-# IMPORT TICKERS
+# SCANNER IMPORT (robust)
+# ==========================================================
+run_scan = _load_module_attr(
+    py_filename="scanner_qullamaggie_enhanced_complete.py",
+    module_name="scanner_qullamaggie_enhanced_complete",
+    attr_name="run_scan",
+)
+setup_store = _load_module_attr(
+    py_filename="scanner_qullamaggie_enhanced_complete.py",
+    module_name="scanner_qullamaggie_enhanced_complete",
+    attr_name="setup_store",
+)
+SetupState = _load_module_attr(
+    py_filename="scanner_qullamaggie_enhanced_complete.py",
+    module_name="scanner_qullamaggie_enhanced_complete",
+    attr_name="SetupState",
+)
+
+# ==========================================================
+# TICKERS IMPORT (best effort)
 # ==========================================================
 def _get_all_tickers_fallback():
     return ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "AMD"]
@@ -75,11 +86,13 @@ try:
 except Exception:
     get_all_tickers = _get_all_tickers_fallback
 
+
 # ==========================================================
 # PAGE CONFIG
 # ==========================================================
 st.set_page_config(page_title="Stocks Scanner", layout="wide")
 st.title("📊 STOCKS SCANNER — Qullamaggie System (Enhanced)")
+
 
 # ==========================================================
 # TELEGRAM CONFIG UI
@@ -104,31 +117,29 @@ with st.sidebar:
     else:
         st.info("Enter token + chat id to enable Telegram.")
 
+
 # ==========================================================
 # DATA PROVIDER
 # ==========================================================
 def get_data_provider():
     """
-    Replace this with YOUR real market data fetcher.
-    It must return dict with keys:
-        close: list[float]
-        high:  list[float]
-        low:   list[float]
-        volume: optional list[float]
+    IMPORTANT:
+    Replace _mock_data with your real market data fetcher if you have one.
+    Must return dict with keys: close, high, low, (optional volume)
     """
-    # Safe fallback to keep the app running even if external APIs fail.
     def _mock_data(symbol: str):
         import random
-        close = [random.uniform(90, 120) for _ in range(80)]
+        close = [random.uniform(90, 120) for _ in range(120)]
         high = [c + random.uniform(0.5, 3.0) for c in close]
         low = [c - random.uniform(0.5, 3.0) for c in close]
-        volume = [random.uniform(1e6, 8e6) for _ in range(80)]
+        volume = [random.uniform(1e6, 8e6) for _ in range(120)]
         return {"close": close, "high": high, "low": low, "volume": volume}
 
     return _mock_data
 
 
 data_provider = get_data_provider()
+
 
 # ==========================================================
 # CONTROLS
@@ -158,6 +169,7 @@ else:
 
 st.caption(f"Symbols loaded: **{len(symbols)}**")
 
+
 # ==========================================================
 # RUN SCAN
 # ==========================================================
@@ -168,10 +180,11 @@ if scan_btn:
         run_scan(symbols, data_provider)
     st.success(f"Scan complete — {len(setup_store)} symbols processed.")
 
+
 # ==========================================================
 # HELPERS
 # ==========================================================
-def _df_for_state(state: SetupState) -> pd.DataFrame:
+def _df_for_state(state) -> pd.DataFrame:
     rows = [s for s in setup_store.values() if s.get("state") == state]
     if not rows:
         return pd.DataFrame()
@@ -226,32 +239,20 @@ left, right = st.columns(2)
 with left:
     st.subheader("🟡 Monitoring")
     df = _df_for_state(SetupState.MONITORING)
-    if df.empty:
-        st.info("No monitoring setups right now.")
-    else:
-        st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True) if not df.empty else st.info("No monitoring setups right now.")
 
     st.subheader("🔵 Setup Forming")
     df = _df_for_state(SetupState.SETUP_FORMING)
-    if df.empty:
-        st.info("No setups forming right now.")
-    else:
-        st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True) if not df.empty else st.info("No setups forming right now.")
 
 with right:
     st.subheader("🟢 Entry Triggered")
     df = _df_for_state(SetupState.ENTRY_TRIGGERED)
-    if df.empty:
-        st.info("No entry triggers right now.")
-    else:
-        st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True) if not df.empty else st.info("No entry triggers right now.")
 
     st.subheader("🔴 Invalidated")
     df = _df_for_state(SetupState.INVALIDATED)
-    if df.empty:
-        st.info("No invalidations.")
-    else:
-        st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True) if not df.empty else st.info("No invalidations.")
 
 st.divider()
 
@@ -267,7 +268,7 @@ if send_telegram_snapshot and bot and scan_btn:
         st.exception(e)
 
 # ==========================================================
-# TELEGRAM COMMAND PROCESSING (ON DEMAND)
+# TELEGRAM COMMANDS (ON DEMAND)
 # ==========================================================
 with st.sidebar:
     st.header("💬 Telegram Commands")
@@ -289,20 +290,16 @@ if process_cmds:
                     _send_dashboard_snapshot_to_telegram()
 
                 elif cmd_clean.startswith("/monitoring"):
-                    df = _df_for_state(SetupState.MONITORING)
-                    bot.send_dataframe(df, title="🟡 Monitoring", max_rows=15)
+                    bot.send_dataframe(_df_for_state(SetupState.MONITORING), title="🟡 Monitoring", max_rows=15)
 
                 elif cmd_clean.startswith("/forming"):
-                    df = _df_for_state(SetupState.SETUP_FORMING)
-                    bot.send_dataframe(df, title="🔵 Setup Forming", max_rows=15)
+                    bot.send_dataframe(_df_for_state(SetupState.SETUP_FORMING), title="🔵 Setup Forming", max_rows=15)
 
                 elif cmd_clean.startswith("/entries"):
-                    df = _df_for_state(SetupState.ENTRY_TRIGGERED)
-                    bot.send_dataframe(df, title="🟢 Entry Triggered", max_rows=15)
+                    bot.send_dataframe(_df_for_state(SetupState.ENTRY_TRIGGERED), title="🟢 Entry Triggered", max_rows=15)
 
                 elif cmd_clean.startswith("/invalidated"):
-                    df = _df_for_state(SetupState.INVALIDATED)
-                    bot.send_dataframe(df, title="🔴 Invalidated", max_rows=15)
+                    bot.send_dataframe(_df_for_state(SetupState.INVALIDATED), title="🔴 Invalidated", max_rows=15)
 
                 elif cmd_clean.startswith("/ticker"):
                     parts = cmd_clean.split()
