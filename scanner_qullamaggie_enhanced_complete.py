@@ -169,15 +169,31 @@ def run_scan(
 # ==========================================================
 # BACKWARD COMPAT: UltraScannerEngine
 # ==========================================================
+
+# ==========================================================
+# BACKWARD COMPAT: UltraScannerEngine
+# ==========================================================
 class UltraScannerEngine:
     """
     Compatibility wrapper used by your original dashboard.
-    It exposes a .run_full_scan(...) method and returns a DataFrame-like list of dicts.
+    Your dashboard calls scanner.run_full_scan() with NO args.
+    This class supports both:
+      - run_full_scan()            -> uses stored symbols/provider
+      - run_full_scan(symbols, provider)
     """
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self, symbols=None, data_provider=None, *args, **kwargs):
+        self.symbols = symbols or []
+        self.data_provider = data_provider
 
-    def run_full_scan(self, symbols: List[str], data_provider: Callable[[str], Optional[Dict[str, List[float]]]]):
-        store = run_scan(symbols, data_provider)
-        # return list-of-dicts compatible with pd.DataFrame(store.values())
+    def set_universe(self, symbols, data_provider):
+        self.symbols = list(symbols) if symbols is not None else []
+        self.data_provider = data_provider
+        return self
+
+    def run_full_scan(self, symbols=None, data_provider=None):
+        syms = symbols if symbols is not None else self.symbols
+        provider = data_provider if data_provider is not None else self.data_provider
+        if provider is None:
+            raise TypeError("UltraScannerEngine.run_full_scan requires a data_provider (not set)")
+        store = run_scan(list(syms), provider)
         return list(store.values())
