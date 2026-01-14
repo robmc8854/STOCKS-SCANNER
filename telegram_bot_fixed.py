@@ -1,18 +1,23 @@
 # telegram_bot_fixed.py
-# FULL DROP-IN FILE — Upgraded Telegram for STOCKS-SCANNER
+# Upgraded Telegram Bot for STOCKS-SCANNER
 #
-# - Provides create_telegram_bot(token, chat_id) expected by Streamlit app
-# - Keeps trade alert + TradingView chart link workflow
-# - Adds send_dataframe for dashboard-style tables
-# - Adds read_commands() for on-demand command processing (Streamlit-safe)
-# - Auto-chunks long messages to avoid Telegram limits
+# ✅ Keeps your current behavior:
+# - send_trade_alert(...) then sends TradingView chart link
+#
+# ✅ Adds:
+# - /start menu + /help
+# - command processing that "replicates the dashboard" (tables, ticker detail, snapshot)
+# - install_commands() to register commands in Telegram UI
+#
+# IMPORTANT:
+# Streamlit Cloud can't run a bot 24/7 in the background.
+# This bot is designed to be polled from Streamlit (manual button or auto-poll while page open).
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 import urllib.parse
-
 import requests
 import pandas as pd
 
@@ -24,7 +29,7 @@ class TelegramConfig:
 
 
 class TelegramBot:
-    TELEGRAM_MAX_LEN = 3900  # safety margin under Telegram hard limit
+    TELEGRAM_MAX_LEN = 3900
 
     def __init__(self, token: str, chat_id: str):
         self.cfg = TelegramConfig(token=token, chat_id=str(chat_id))
@@ -32,44 +37,52 @@ class TelegramBot:
         self._last_update_id: Optional[int] = None
 
     # ------------------
-    # Utils
+    # HTTP helpers
     # ------------------
+    def _get(self, method: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        try:
+            r = requests.get(f"{self.base_url}/{method}", params=params or {}, timeout=25)
+            if not r.ok:
+                return None
+            data = r.json()
+            if not data.get("ok"):
+                return None
+            return data
+        except Exception:
+            return None
+
+    def _post(self, method: str, json_payload: Optional[Dict[str, Any]] = None, data_payload: Optional[Dict[str, Any]] = None) -> bool:
+        try:
+            url = f"{self.base_url}/{method}"
+            if json_payload is not None:
+                r = requests.post(url, json=json_payload, timeout=20)
+            else:
+                r = requests.post(url, data=data_payload or {}, timeout=20)
+            return bool(r.ok)
+        except Exception:
+            return False
+
     def _chunk_text(self, text: str, max_len: int) -> List[str]:
         if len(text) <= max_len:
             return [text]
-        chunks: List[str] = []
-        lines = text.splitlines()
+        parts: List[str] = []
         buf = ""
-        for line in lines:
+        for line in text.splitlines():
             if len(buf) + len(line) + 1 > max_len:
                 if buf:
-                    chunks.append(buf)
+                    parts.append(buf)
                     buf = ""
-            # split very long lines
-            while len(line) > max_len:
-                chunks.append(line[:max_len])
-                line = line[max_len:]
-            buf = (buf + "\n" + line) if buf else line
+            if len(line) > max_len:
+                for i in range(0, len(line), max_len):
+                    parts.append(line[i:i+max_len])
+            else:
+                buf = (buf + "\n" + line) if buf else line
         if buf:
-            chunks.append(buf)
-        return chunks
-
-    def _post_json(self, method: str, payload: Dict[str, Any]) -> bool:
-        try:
-            r = requests.post(f"{self.base_url}/{method}", json=payload, timeout=20)
-            return bool(r.ok)
-        except Exception:
-            return False
-
-    def _post_data(self, method: str, payload: Dict[str, Any]) -> bool:
-        try:
-            r = requests.post(f"{self.base_url}/{method}", data=payload, timeout=20)
-            return bool(r.ok)
-        except Exception:
-            return False
+            parts.append(buf)
+        return parts
 
     # ------------------
-    # Senders
+    # Messaging
     # ------------------
     def send_text(self, text: str, disable_web_page_preview: bool = False) -> bool:
         ok = True
@@ -79,14 +92,18 @@ class TelegramBot:
                 "text": part,
                 "disable_web_page_preview": disable_web_page_preview,
             }
-            ok = self._post_json("sendMessage", payload) and ok
+            ok = self._post("sendMessage", json_payload=payload) and ok
         return ok
 
-    def send_photo_url(self, photo_url: str, caption: Optional[str] = None) -> bool:
-        payload = {"chat_id": self.cfg.chat_id, "photo": photo_url}
-        if caption:
-            payload["caption"] = caption[:900]
-        return self._post_data("sendPhoto", payload)
+    def send_dataframe(self, df: pd.DataFrame, title: str, max_rows: int = 15) -> None:
+        if df is None or df.empty:
+            self.send_text(f"{title}: none right now.", disable_web_page_preview=True)
+            return
+        d = df.copy().head(max_rows)
+        if d.shape[1] > 9:
+            d = d.iloc[:, :9]
+        txt = d.to_string(index=False)
+        self.send_text(f"{title}\n{txt}", disable_web_page_preview=True)
 
     # ------------------
     # TradingView
@@ -97,11 +114,10 @@ class TelegramBot:
         return f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(sym)}"
 
     def send_tradingview_chart(self, symbol: str, exchange: str = "NASDAQ") -> bool:
-        link = self.tradingview_chart_link(symbol, exchange=exchange)
-        return self.send_text(f"📈 TradingView: {link}", disable_web_page_preview=False)
+        return self.send_text(f"📈 TradingView: {self.tradingview_chart_link(symbol, exchange)}", disable_web_page_preview=False)
 
     # ------------------
-    # Trade alerts (keep existing workflow)
+    # Keep your current trade alert behavior
     # ------------------
     def send_trade_alert(
         self,
@@ -124,63 +140,132 @@ class TelegramBot:
             parts.append(f"Stop: {stop}")
         if notes:
             parts.append(notes)
-
         self.send_text("\n".join(parts), disable_web_page_preview=True)
         self.send_tradingview_chart(symbol, exchange=exchange)
 
     # ------------------
-    # Dashboard-style tables
+    # Commands UI (Telegram /start menu)
     # ------------------
-    def send_dataframe(self, df: pd.DataFrame, title: str = "", max_rows: int = 15) -> None:
-        if df is None or df.empty:
-            self.send_text(f"{title}: none right now." if title else "None right now.")
-            return
+    def install_commands(self) -> None:
+        commands = [
+            {"command": "start", "description": "Show menu"},
+            {"command": "help", "description": "How to use"},
+            {"command": "dashboard", "description": "Snapshot counts"},
+            {"command": "monitoring", "description": "Monitoring setups"},
+            {"command": "forming", "description": "Forming setups"},
+            {"command": "entries", "description": "Entry triggered"},
+            {"command": "invalidated", "description": "Invalidated"},
+            {"command": "ticker", "description": "Ticker details: /ticker TSLA"},
+            {"command": "top", "description": "Top setups: /top 20"},
+        ]
+        self._post("setMyCommands", json_payload={"commands": commands})
 
-        df2 = df.head(max_rows).copy()
-        if df2.shape[1] > 10:
-            df2 = df2.iloc[:, :10]
-
-        text = df2.to_string(index=False)
-        msg = f"{title}\n{text}" if title else text
-        self.send_text(msg, disable_web_page_preview=True)
+    def _menu_text(self) -> str:
+        return (
+            "👋 Welcome to Stocks Scanner Bot\n\n"
+            "Commands:\n"
+            "• /dashboard — snapshot counts\n"
+            "• /monitoring — monitoring setups\n"
+            "• /forming — setups forming\n"
+            "• /entries — entry triggered\n"
+            "• /invalidated — invalidated\n"
+            "• /top 20 — top setups\n"
+            "• /ticker TSLA — ticker detail + TradingView link\n\n"
+            "Tip: run a scan in Streamlit so the bot has fresh data."
+        )
 
     # ------------------
-    # Commands (poll once)
+    # Polling (called from Streamlit)
     # ------------------
-    def get_updates(self, timeout: int = 0) -> List[Dict[str, Any]]:
-        try:
-            url = f"{self.base_url}/getUpdates"
-            params: Dict[str, Any] = {"timeout": timeout}
-            if self._last_update_id is not None:
-                params["offset"] = self._last_update_id + 1
-
-            r = requests.get(url, params=params, timeout=25)
-            if not r.ok:
-                return []
-            data = r.json()
-            if not data.get("ok"):
-                return []
-            results = data.get("result", [])
-            if results:
-                self._last_update_id = results[-1].get("update_id", self._last_update_id)
-            return results
-        except Exception:
+    def get_updates(self) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {}
+        if self._last_update_id is not None:
+            params["offset"] = self._last_update_id + 1
+        data = self._get("getUpdates", params=params)
+        if not data:
             return []
-
-    @staticmethod
-    def _extract_text(update: Dict[str, Any]) -> Optional[str]:
-        msg = update.get("message") or update.get("edited_message")
-        if not msg:
-            return None
-        return msg.get("text")
+        results = data.get("result", [])
+        if results:
+            self._last_update_id = results[-1].get("update_id", self._last_update_id)
+        return results
 
     def read_commands(self) -> List[str]:
         cmds: List[str] = []
-        for upd in self.get_updates(timeout=0):
-            text = self._extract_text(upd)
-            if text and text.strip().startswith("/"):
-                cmds.append(text.strip())
+        for upd in self.get_updates():
+            msg = upd.get("message") or upd.get("edited_message") or {}
+            text = (msg.get("text") or "").strip()
+            if text.startswith("/"):
+                cmds.append(text)
         return cmds
+
+    # ------------------
+    # Command router (called from Streamlit)
+    # ------------------
+    def reply_to_commands(self, commands: List[str], df: pd.DataFrame, snapshot_text: str, exchange: str = "NASDAQ") -> None:
+        if df is None:
+            df = pd.DataFrame()
+
+        for cmd in commands:
+            c = cmd.strip()
+            c_low = c.lower()
+
+            if c_low.startswith("/start"):
+                self.send_text(self._menu_text(), disable_web_page_preview=True)
+
+            elif c_low.startswith("/help"):
+                self.send_text(self._menu_text(), disable_web_page_preview=True)
+
+            elif c_low.startswith("/dashboard"):
+                self.send_text(snapshot_text, disable_web_page_preview=True)
+
+            elif c_low.startswith("/monitoring"):
+                self.send_dataframe(df[df["state"].astype(str) == "MONITORING"], "🟡 Monitoring", max_rows=15)
+
+            elif c_low.startswith("/forming"):
+                self.send_dataframe(df[df["state"].astype(str) == "SETUP_FORMING"], "🔵 Setup Forming", max_rows=15)
+
+            elif c_low.startswith("/entries"):
+                self.send_dataframe(df[df["state"].astype(str) == "ENTRY_TRIGGERED"], "🟢 Entry Triggered", max_rows=15)
+
+            elif c_low.startswith("/invalidated"):
+                self.send_dataframe(df[df["state"].astype(str) == "INVALIDATED"], "🔴 Invalidated", max_rows=15)
+
+            elif c_low.startswith("/top"):
+                # /top 20
+                n = 15
+                parts = c.split()
+                if len(parts) > 1:
+                    try:
+                        n = max(1, min(50, int(parts[1])))
+                    except Exception:
+                        n = 15
+                self.send_dataframe(df.head(n), f"🏆 Top {n}", max_rows=n)
+
+            elif c_low.startswith("/ticker"):
+                parts = c.split()
+                if len(parts) < 2:
+                    self.send_text("Usage: /ticker TSLA", disable_web_page_preview=True)
+                else:
+                    sym = parts[1].upper()
+                    sub = df[df["symbol"] == sym]
+                    if sub.empty:
+                        self.send_text(f"No data for {sym}. Run a scan first.", disable_web_page_preview=True)
+                    else:
+                        row = sub.iloc[0].to_dict()
+                        msg = (
+                            f"📌 {sym}\n"
+                            f"State: {row.get('state')}\n"
+                            f"Last: {row.get('last_price')}\n"
+                            f"Base: {row.get('base_low')} – {row.get('base_high')}\n"
+                            f"Entry: {row.get('entry_price')}\n"
+                            f"Days in base: {row.get('days_in_base')}\n"
+                            f"Reason: {row.get('invalid_reason')}"
+                        )
+                        self.send_text(msg, disable_web_page_preview=True)
+                        self.send_tradingview_chart(sym, exchange=exchange)
+
+            else:
+                self.send_text("Unknown command. Send /start for menu.", disable_web_page_preview=True)
 
 
 def create_telegram_bot(token: str, chat_id: str, **kwargs) -> TelegramBot:
