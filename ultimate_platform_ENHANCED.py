@@ -882,9 +882,9 @@ if st.session_state.auto_scan_enabled:
         # Run scan automatically
         results = st.session_state.scanner.run_full_scan()
         st.session_state.scan_results = results
-                # Update setup tracker with new scan results
-                st.session_state.setup_tracker.ingest_scan_results(results)
-                st.session_state.setup_tracker.update_prices_and_states()
+        # Update setup tracker with new scan results
+        st.session_state.setup_tracker.ingest_scan_results(results)
+        st.session_state.setup_tracker.update_prices_and_states()
         st.session_state.last_scan_time = datetime.now()
         
         # Auto-validate and send alerts (ONLY NEW ONES)
@@ -2062,4 +2062,3 @@ col4.markdown(f"**Features:** ALL 234 ACTIVE")
 if len(account.positions) > 0:
     time.sleep(2)
     st.rerun()
-
