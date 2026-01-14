@@ -17,7 +17,17 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner_qullamaggie_enhanced_complete import UltraScannerEngine
+try:
+    from scanner_qullamaggie_enhanced_complete import UltraScannerEngine  # type: ignore
+except Exception:
+    # Fallback: load directly from file (Streamlit Cloud import-safe)
+    import importlib.util as _ilu
+    _p = Path(__file__).resolve().parent / 'scanner_qullamaggie_enhanced_complete.py'
+    _spec = _ilu.spec_from_file_location('scanner_qullamaggie_enhanced_complete', _p)
+    _mod = _ilu.module_from_spec(_spec)  # type: ignore
+    assert _spec and _spec.loader
+    _spec.loader.exec_module(_mod)  # type: ignore
+    UltraScannerEngine = _mod.UltraScannerEngine
 from config import config
 
 # =============================================================================

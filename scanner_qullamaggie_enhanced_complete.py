@@ -1,12 +1,11 @@
 # scanner_qullamaggie_enhanced_complete.py
-# FULL DROP-IN FILE — Scanner State Engine + Monitoring
+# FULL DROP-IN FILE — Backward compatible
 #
-# Exposes (required by ultimate_platform_ENHANCED.py):
-#   - SetupState
-#   - setup_store
-#   - run_scan(symbols, data_provider)
+# Provides BOTH:
+#   - UltraScannerEngine  ✅ (expected by original ultimate_platform_ENHANCED.py)
+#   - SetupState, setup_store, run_scan(symbols, data_provider)  ✅ (used by enhancements)
 #
-# This is Streamlit-safe: no infinite loops. It evaluates symbols once per call.
+# This avoids Streamlit import crashes when the dashboard expects UltraScannerEngine.
 
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ class SetupState(str, Enum):
     INVALIDATED = "INVALIDATED"
 
 
-# Dashboard reads from this store
+# Global store for dashboard/telegram
 setup_store: Dict[str, Dict[str, Any]] = {}
 
 
@@ -42,10 +41,9 @@ def _init_setup(symbol: str) -> Dict[str, Any]:
 
 
 # ---------------------------
-# QULLAMAGGIE-STYLE HELPERS
+# Qullamaggie-style helpers
 # ---------------------------
 def _strong_uptrend(data: Dict[str, List[float]]) -> bool:
-    # Simple default; replace with your existing enhanced logic if you have it
     c = data["close"]
     if len(c) < 50:
         return False
@@ -58,21 +56,22 @@ def _pullback_ok(data: Dict[str, List[float]]) -> bool:
         return False
     recent_low = min(c[-10:])
     prior = c[-40]
-    return recent_low > prior * 0.95  # not a deep breakdown
+    return recent_low > prior * 0.95
 
 
 def _volume_contracting(data: Dict[str, List[float]]) -> bool:
     v = data.get("volume")
     if not v or len(v) < 30:
         return True
-    return sum(v[-5:]) < sum(v[-15:-10])  # crude contraction
+    return sum(v[-5:]) < sum(v[-15:-10])
 
 
 def _volume_expansion(data: Dict[str, List[float]]) -> bool:
     v = data.get("volume")
     if not v or len(v) < 30:
         return True
-    return v[-1] > (sum(v[-20:-1]) / 19) * 1.2
+    avg = sum(v[-20:-1]) / 19
+    return v[-1] > avg * 1.2
 
 
 def _detect_base(data: Dict[str, List[float]]) -> Optional[tuple]:
@@ -84,9 +83,6 @@ def _detect_base(data: Dict[str, List[float]]) -> Optional[tuple]:
     window_l = l[-7:]
     base_high = max(window_h)
     base_low = min(window_l)
-    if base_high <= 0 or base_low <= 0:
-        return None
-    # Require "tight-ish" range
     rng = (base_high - base_low) / base_high
     if rng > 0.08:
         return None
@@ -108,12 +104,10 @@ def _evaluate_symbol(symbol: str, data: Dict[str, List[float]]) -> Dict[str, Any
     base = _detect_base(data)
     vol_contract = _volume_contracting(data)
 
-    # NONE -> SETUP_FORMING
     if setup["state"] == SetupState.NONE:
         if uptrend and pullback:
             setup["state"] = SetupState.SETUP_FORMING
 
-    # SETUP_FORMING -> MONITORING
     elif setup["state"] == SetupState.SETUP_FORMING:
         if base and vol_contract:
             base_high, base_low = base
@@ -122,11 +116,9 @@ def _evaluate_symbol(symbol: str, data: Dict[str, List[float]]) -> Dict[str, Any
             setup["base_low"] = float(base_low)
             setup["days_in_base"] = 1
 
-    # MONITORING -> ENTRY / INVALIDATED
     elif setup["state"] == SetupState.MONITORING:
         setup["days_in_base"] = int(setup.get("days_in_base", 0)) + 1
 
-        # Update base if still valid
         if base:
             base_high, base_low = base
             setup["base_high"] = float(base_high)
@@ -147,13 +139,9 @@ def _evaluate_symbol(symbol: str, data: Dict[str, List[float]]) -> Dict[str, Any
             setup["state"] = SetupState.INVALIDATED
             setup["invalid_reason"] = "Base breakdown"
 
-        # Stale cleanup: too long in base
         if setup["state"] == SetupState.MONITORING and setup["days_in_base"] > 25:
             setup["state"] = SetupState.INVALIDATED
             setup["invalid_reason"] = "Stale (time stop)"
-
-    # ENTRY_TRIGGERED -> leave as-is (exits handled elsewhere)
-    # INVALIDATED -> leave as-is (dashboard can filter or you can prune)
 
     if setup["state"] != prev:
         setup["last_state_change"] = datetime.utcnow()
@@ -161,20 +149,35 @@ def _evaluate_symbol(symbol: str, data: Dict[str, List[float]]) -> Dict[str, Any
     return setup
 
 
-def run_scan(symbols: List[str], data_provider: Callable[[str], Optional[Dict[str, List[float]]]]) -> Dict[str, Dict[str, Any]]:
-    """
-    Evaluate each symbol once. data_provider(symbol) must return OHLCV dict.
-    """
+def run_scan(
+    symbols: List[str],
+    data_provider: Callable[[str], Optional[Dict[str, List[float]]]],
+) -> Dict[str, Dict[str, Any]]:
     for sym in symbols:
         try:
             data = data_provider(sym)
             if not data:
                 continue
-            # Require keys
             if "close" not in data or "high" not in data or "low" not in data:
                 continue
             _evaluate_symbol(sym, data)
         except Exception:
-            # Never let one ticker break the whole scan
             continue
     return setup_store
+
+
+# ==========================================================
+# BACKWARD COMPAT: UltraScannerEngine
+# ==========================================================
+class UltraScannerEngine:
+    """
+    Compatibility wrapper used by your original dashboard.
+    It exposes a .run_full_scan(...) method and returns a DataFrame-like list of dicts.
+    """
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def run_full_scan(self, symbols: List[str], data_provider: Callable[[str], Optional[Dict[str, List[float]]]]):
+        store = run_scan(symbols, data_provider)
+        # return list-of-dicts compatible with pd.DataFrame(store.values())
+        return list(store.values())
