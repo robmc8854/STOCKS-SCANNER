@@ -281,3 +281,12 @@ class UltraScannerEngine:
 
 # Convenience alias some versions of your app may use
 QullamaggieEnhancedScanner = UltraScannerEngine
+
+# ---- Backward compat: add missing update_from_results to SetupTracker if older code expects it
+try:
+    if 'SetupTracker' in globals() and not hasattr(SetupTracker, 'update_from_results'):
+        def _update_from_results(self, results):
+            return getattr(self, 'ingest_scan_results', lambda r: [])(results)
+        SetupTracker.update_from_results = _update_from_results  # type: ignore
+except Exception:
+    pass
